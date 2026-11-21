@@ -1,0 +1,23 @@
+const sim = require(__dirname + '/../js/sim.js');
+const fs = require('fs');
+const R = JSON.parse(fs.readFileSync(__dirname + '/../data/recipes.json','utf8'));
+const names = JSON.parse(fs.readFileSync(__dirname + '/../data/actions.json','utf8'));
+// 找 100 級、各種星數配方
+const list = R.recipes.filter(r => R.rlt[r[5]][0] === 100 && (r[12]&1) && !(r[12]&2));
+const byRlt = {};
+for (const r of list) byRlt[r[5]] = r;
+console.log('lvl100 rlt:', Object.keys(byRlt).map(k => k + ':' + R.rlt[k].join('/')));
+const rid = process.argv[2] ? +process.argv[2] : Object.keys(byRlt)[0];
+const row = byRlt[rid];
+const rp = sim.recipeParams(row, R.rlt[row[5]]);
+console.log('recipe', row[0], rp);
+const cs = +(process.argv[3]||5500), ct = +(process.argv[4]||5400), cp = +(process.argv[5]||720), width=+(process.argv[6]||3000);
+const ctx = sim.makeCtx({level:100,craftsmanship:cs,control:ct,cp,specialist:false}, rp);
+console.log('ctx', ctx);
+const t0 = Date.now();
+const res = sim.solve(ctx, {width, timeLimitMs: 120000});
+console.log('time', Date.now()-t0, 'ms', 'finished', res.finished, 'reached', res.reachedTarget);
+console.log(res.keys.map(k => names[k]).join(' > '));
+const sm = sim.simulate(ctx, res.keys);
+console.log('final', sm.final, 'status', sm.status, sm.error);
+console.log(sim.buildMacros(res.keys, names).map(m=>m.text).join('\n---\n'));

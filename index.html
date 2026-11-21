@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FF14 製作規劃工具（繁中服）</title>
+<meta name="description" content="FF14 繁中服：搜尋物品、建立製作清單、準備素材、計算製作巨集、潛水艇組件製作。">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand">⚒ FF14 製作規劃</div>
+    <nav id="nav">
+      <a href="#/search" data-r="search">搜尋物品</a>
+      <a href="#/list" data-r="list">製作清單<span class="badge" id="listBadge">0</span></a>
+      <a href="#/materials" data-r="materials">素材準備</a>
+      <a href="#/macro" data-r="macro">巨集計算</a>
+      <a href="#/sub" data-r="sub">潛水艇組件</a>
+    </nav>
+  </div>
+</header>
+<main id="view"><div class="empty">資料載入中…</div></main>
+<footer>
+  資料來源：<a href="https://github.com/thewakingsands/ffxiv-datamining-tc" target="_blank" rel="noopener">thewakingsands/ffxiv-datamining-tc</a>（繁中服）。
+  圖示由 <a href="https://v2.xivapi.com" target="_blank" rel="noopener">XIVAPI</a> 提供。
+  本站為玩家自製的非官方工具，與 SQUARE ENIX 無關。FINAL FANTASY 是 SQUARE ENIX CO., LTD. 的註冊商標。
+  <span id="dataVer"></span>
+</footer>
+<div id="toast" class="toast hidden"></div>
+<dialog id="dlg"></dialog>
+<noscript>此網站需要啟用 JavaScript。</noscript>
+<script src="js/sim.js"></script>
+<script src="js/data.js"></script>
+<script src="js/planner.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
