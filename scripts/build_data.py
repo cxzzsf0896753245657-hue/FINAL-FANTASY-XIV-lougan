@@ -10,7 +10,8 @@
   data/items.json    物品（只含配方成品、素材、公司工房用到的物品）
   data/recipes.json  一般製作配方 + 配方等級表
   data/fc.json       公司工房製作（含潛水艇／飛空艇組件）、潛水艇零件數值
-  data/actions.json  製作技能 繁中名稱（巨集用）
+  data/actions.json  製作技能 繁中名稱與圖示（巨集用）
+  data/sets.json     可製作的裝備套裝（同等級、同系列名稱）
 """
 import argparse
 import csv
@@ -26,7 +27,7 @@ FILES = [
     "CompanyCraftSequence", "CompanyCraftPart", "CompanyCraftProcess",
     "CompanyCraftSupplyItem", "CompanyCraftType", "SubmarinePart",
     "SubmarineRank", "GatheringItem", "GilShopItem", "SpearfishingItem",
-    "FishParameter", "CraftAction", "Action",
+    "FishParameter", "CraftAction", "Action", "ClassJobCategory", "ClassJob",
 ]
 
 # 巨集會用到的非製作職專屬技能 (Action sheet) —— 用「職業無關」的木工 ID 取繁中名稱
@@ -298,19 +299,93 @@ def main():
             cat_pos[cid], flags, price,
         ])
 
-    # ---------- 技能名稱 ----------
+    # ---------- 技能名稱與圖示 ----------
     ai, act_rows = load(a.raw, "Action")
-    act_by_id = {to_int(r[0]): r[ai["Name"]] for r in act_rows if to_int(r[0]) in BUFF_ACTION_IDS.values()}
+    act_by_id = {to_int(r[0]): (r[ai["Name"]], to_int(r[ai["Icon"]])) for r in act_rows if to_int(r[0]) in BUFF_ACTION_IDS.values()}
     ci, ca_rows = load(a.raw, "CraftAction")
-    ca_by_id = {to_int(r[0]): r[ci["Name"]] for r in ca_rows if to_int(r[0]) in CRAFT_ACTION_IDS.values()}
-    action_names = {}
+    ca_by_id = {to_int(r[0]): (r[ci["Name"]], to_int(r[ci["Icon"]])) for r in ca_rows if to_int(r[0]) in CRAFT_ACTION_IDS.values()}
+    action_names, action_icons = {}, {}
     for key, aid in BUFF_ACTION_IDS.items():
-        action_names[key] = act_by_id.get(aid, "")
+        action_names[key], action_icons[key] = act_by_id.get(aid, ("", 0))
     for key, aid in CRAFT_ACTION_IDS.items():
-        action_names[key] = ca_by_id.get(aid, "")
+        action_names[key], action_icons[key] = ca_by_id.get(aid, ("", 0))
     missing = [k for k, v in action_names.items() if not v]
     if missing:
         print("警告：缺少技能名稱", missing, file=sys.stderr)
+
+    # ---------- 裝備套裝 ----------
+    cji, cj_rows = load(a.raw, "ClassJob")
+    job_zh = {}
+    for r in cj_rows:
+        ab = r[cji["Abbreviation"]]
+        if ab and r[cji["Name"]]:
+            job_zh.setdefault(ab, r[cji["Name"]])
+    cci, cc_rows = load(a.raw, "ClassJobCategory")
+    abbrs = [h for h in cci if h not in ("#", "Name")]
+    DOH = {"CRP", "BSM", "ARM", "GSM", "LTW", "WVR", "ALC", "CUL"}
+    DOL = {"MIN", "BTN", "FSH"}
+    cjc = {}
+    for r in cc_rows:
+        k = to_int(r[0])
+        cat_jobs = [ab for ab in abbrs if r[cci[ab]] == "True"]
+        cjc[k] = (r[cci["Name"]], cat_jobs)
+
+    def role_of(jobs):
+        js = set(jobs)
+        if not js:
+            return None
+        if js <= DOH:
+            return "製作"
+        if js <= DOL:
+            return "採集"
+        if js & (DOH | DOL):
+            return None
+        return "戰鬥"
+
+    def lcp(names):
+        p = names[0]
+        for n in names[1:]:
+            i = 0
+            while i < len(p) and i < len(n) and p[i] == n[i]:
+                i += 1
+            p = p[:i]
+        return p
+
+    recipe_results = {r[2] for r in recipes}
+    clusters = {}
+    for iid in recipe_results:
+        r = items_raw.get(iid)
+        if not r or to_int(r[ii["EquipSlotCategory"]]) <= 0:
+            continue
+        elvl = to_int(r[ii["Level{Equip}"]])
+        if elvl <= 1:
+            continue
+        c = to_int(r[ii["ClassJobCategory"]])
+        if c not in cjc:
+            continue
+        role = role_of(cjc[c][1])
+        if not role:
+            continue
+        name = r[ii["Name"]]
+        key = (role, to_int(r[ii["Level{Item}"]]), elvl, name[:2])
+        clusters.setdefault(key, []).append((iid, c, to_int(r[ii["EquipSlotCategory"]])))
+    sets = []
+    used_cjc = set()
+    for (role, ilvl, elvl, _), mem in clusters.items():
+        if len(mem) < 3:
+            continue
+        mem.sort(key=lambda x: (x[2], x[0]))
+        nm = lcp([items_raw[m[0]][ii["Name"]] for m in mem])
+        if len(nm) < 2:
+            nm = items_raw[mem[0][0]][ii["Name"]][:2]
+        sets.append([nm, role, ilvl, elvl, [[m[0], m[1]] for m in mem]])
+        used_cjc.update(m[1] for m in mem)
+    sets.sort(key=lambda s: (-s[3], -s[2], s[1], s[0]))
+    sets_out = {
+        "sets": sets,
+        "cjc": {k: [cjc[k][0], cjc[k][1]] for k in sorted(used_cjc)},
+        "jobs": job_zh,
+    }
 
     meta = {"builtAt": time.strftime("%Y-%m-%d", time.gmtime()), "source": "thewakingsands/ffxiv-datamining-tc"}
 
@@ -323,8 +398,9 @@ def main():
     dump("items.json", {"meta": meta, "cats": cat_index, "items": items})
     dump("recipes.json", {"jobs": [jobs[k] for k in sorted(jobs)], "rlt": rlt, "recipes": recipes})
     dump("fc.json", {"seqs": fc, "subItems": sub_item_map, "subParts": sub_parts, "subRanks": sub_ranks})
-    dump("actions.json", action_names)
-    print("物品 %d / 配方 %d / 工房 %d / 潛水艇零件 %d" % (len(items), len(recipes), len(fc), len(sub_parts)), file=sys.stderr)
+    dump("actions.json", {"names": action_names, "icons": action_icons})
+    dump("sets.json", sets_out)
+    print("物品 %d / 配方 %d / 工房 %d / 潛水艇零件 %d / 套裝 %d" % (len(items), len(recipes), len(fc), len(sub_parts), len(sets)), file=sys.stderr)
 
 
 if __name__ == "__main__":

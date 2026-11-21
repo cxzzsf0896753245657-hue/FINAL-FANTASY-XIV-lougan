@@ -7,11 +7,13 @@
   const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : (d || 0); };
   const fmt = n => Number(n).toLocaleString('en-US');
   const view = $('#view');
+  const D = () => FF.D;
 
-  // ------------------------------------------------------------ 儲存
+  // ============================================================ 儲存（localStorage）
   const KEY = 'ffxivcp.v1';
   const newId = () => 'l' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
   const newList = name => ({ id: newId(), name: name || '清單 1', items: [], stock: {}, done: {}, buy: {}, pick: {} });
+  const DEFAULT_STATS = { level: 100, cs: 4000, ctl: 4000, cp: 600, spec: false };
   const Store = {
     d: null,
     load() {
@@ -23,8 +25,11 @@
     },
     save() { try { localStorage.setItem(KEY, JSON.stringify(this.d)); } catch (e) { /* 無法儲存時略過 */ } },
     get list() { return this.d.lists.find(l => l.id === this.d.cur); },
+    stats(job) { return Object.assign({}, DEFAULT_STATS, this.d.stats[job] || {}); },
+    setStats(job, st) { this.d.stats[job] = Object.assign(this.stats(job), st); this.save(); },
   };
 
+  // ============================================================ 共用
   function toast(msg) {
     const t = $('#toast');
     t.textContent = msg; t.classList.remove('hidden');
@@ -47,25 +52,19 @@
     if (onMount) onMount(d);
     return d;
   }
-
-  // ------------------------------------------------------------ 共用顯示
-  const D = () => FF.D;
-  const icon = (item, cls) => item && item.icon
-    ? '<img class="icon ' + (cls || '') + '" loading="lazy" referrerpolicy="no-referrer" src="' + FF.iconUrl(item.icon) + '" alt="" onerror="this.style.visibility=\'hidden\'">'
+  const img = (iconId, cls) => iconId
+    ? '<img class="icon ' + (cls || '') + '" loading="lazy" referrerpolicy="no-referrer" src="' + FF.iconUrl(iconId) + '" alt="" onerror="this.style.visibility=\'hidden\'">'
     : '<span class="icon ' + (cls || '') + '"></span>';
+  const icon = (item, cls) => img(item && item.icon, cls);
   const stars = n => (n > 0 ? '<span class="star">' + '★'.repeat(n) + '</span>' : '');
-  const jobTag = rec => '<span class="tag job">' + FF.JOB_ICON[rec.job] + ' ' + esc(D().jobs[rec.job]) + ' Lv' + rec.level + (rec.stars ? ' ' + stars(rec.stars) : '') + '</span>';
+  const jobTag = rec => '<span class="tag job">' + esc(D().jobs[rec.job]) + ' Lv' + rec.level + (rec.stars ? '&nbsp;' + stars(rec.stars) : '') + '</span>';
   const ingText = (ings, max) => {
     const arr = ings.slice(0, max || 99).map(([id, n]) => esc(FF.itemName(id)) + '×' + n);
     return arr.join('、') + (ings.length > (max || 99) ? '…' : '');
   };
   const srcTag = s => '<span class="tag src-' + s + '">' + esc(FF.SOURCE_LABEL[s].split('（')[0]) + '</span>';
 
-  function updateBadge() {
-    const n = Store.list.items.length;
-    $('#listBadge').textContent = n;
-  }
-
+  function updateBadge() { $('#listBadge').textContent = Store.list.items.length; }
   function addToList(id, qty, rid) {
     const l = Store.list;
     const ex = l.items.find(x => x.id === id);
@@ -74,8 +73,8 @@
     Store.save(); updateBadge();
   }
 
-  // ------------------------------------------------------------ 路由
-  const routes = { search: renderSearch, list: renderList, materials: renderMaterials, macro: renderMacro, sub: renderSub };
+  // ============================================================ 路由與事件
+  const routes = {};
   function route() {
     const h = location.hash.replace(/^#\/?/, '');
     const parts = h.split('/');
@@ -87,15 +86,10 @@
     routes[name](parts.slice(1));
     window.scrollTo(0, 0);
   }
-
-  // 事件代理
-  const actions = {};
-  const inputs = {};
+  const actions = {}, inputs = {};
   view.addEventListener('click', e => {
     const b = e.target.closest('[data-act]');
-    if (!b) return;
-    const f = actions[b.dataset.act];
-    if (f) f(b, e);
+    if (b && actions[b.dataset.act]) actions[b.dataset.act](b, e);
   });
   view.addEventListener('change', e => {
     const t = e.target.closest('[data-in]');
@@ -106,46 +100,45 @@
     if (t && inputs[t.dataset.live]) inputs[t.dataset.live](t, e);
   });
 
-  // ============================================================ 搜尋
+  // ============================================================ 搜尋物品
   const S = { q: '', job: '', minLv: '', maxLv: '', cat: '', limit: 60 };
-  function renderSearch() {
+  routes.search = function () {
     if (!D().craftCats) {
       const set = new Set();
       for (const e of D().search) set.add(e.item.cat);
       D().craftCats = Array.from(set).filter(c => D().cats[c]).sort((a, b) => D().cats[a].localeCompare(D().cats[b], 'zh-Hant'));
     }
     view.innerHTML = `
-      <div class="panel">
-        <h2>搜尋物品</h2>
-        <div class="row">
-          <input id="sq" class="grow" data-live="sq" type="search" placeholder="輸入物品名稱（例如：鯊魚級、秘銀、藥水）" value="${esc(S.q)}" autocomplete="off">
-          <select id="sjob" data-in="sfilter">
-            <option value="">全部職業</option>
-            ${D().jobs.map((j, i) => `<option value="${i}" ${String(S.job) === String(i) ? 'selected' : ''}>${FF.JOB_ICON[i]} ${esc(j)}</option>`).join('')}
-            <option value="fc" ${S.job === 'fc' ? 'selected' : ''}>🏠 部隊工房</option>
-          </select>
-          <input id="smin" data-in="sfilter" type="number" min="1" max="100" placeholder="最低等級" value="${esc(S.minLv)}" title="配方最低等級">
-          <input id="smax" data-in="sfilter" type="number" min="1" max="100" placeholder="最高等級" value="${esc(S.maxLv)}" title="配方最高等級">
-          <select id="scat" data-in="sfilter">
-            <option value="">全部分類</option>
-            ${D().craftCats.map(c => `<option value="${c}" ${String(S.cat) === String(c) ? 'selected' : ''}>${esc(D().cats[c])}</option>`).join('')}
-          </select>
-          <button data-act="sclear">清除</button>
-        </div>
-        <div class="muted small" style="margin-top:6px" id="scount"></div>
+      <div class="page-title">搜尋物品</div>
+      <div class="row">
+        <input id="sq" class="grow" data-live="sq" type="search" placeholder="輸入物品名稱（例如：雀翎、秘銀、藥水）" value="${esc(S.q)}" autocomplete="off">
       </div>
-      <div class="panel" id="sres"></div>`;
+      <div class="row" style="margin:10px 0 4px">
+        <label class="f">職業 <select id="sjob" data-in="sfilter">
+          <option value="">全部</option>
+          ${D().jobs.map((j, i) => `<option value="${i}" ${String(S.job) === String(i) ? 'selected' : ''}>${esc(j)}</option>`).join('')}
+          <option value="fc" ${S.job === 'fc' ? 'selected' : ''}>部隊工房</option>
+        </select></label>
+        <label class="f">配方等級 <input id="smin" data-in="sfilter" type="number" min="1" max="100" placeholder="最低" value="${esc(S.minLv)}">
+        – <input id="smax" data-in="sfilter" type="number" min="1" max="100" placeholder="最高" value="${esc(S.maxLv)}"></label>
+        <label class="f">分類 <select id="scat" data-in="sfilter">
+          <option value="">全部</option>
+          ${D().craftCats.map(c => `<option value="${c}" ${String(S.cat) === String(c) ? 'selected' : ''}>${esc(D().cats[c])}</option>`).join('')}
+        </select></label>
+        <button data-act="sclear">清除</button>
+        <span class="sp"></span><span class="muted small" id="scount"></span>
+      </div>
+      <div id="sres"></div>`;
     updateSearch();
     $('#sq').focus();
-  }
+  };
   inputs.sq = el => { S.q = el.value; S.limit = 60; updateSearch(); };
   inputs.sfilter = () => {
     S.job = $('#sjob').value; S.minLv = $('#smin').value; S.maxLv = $('#smax').value; S.cat = $('#scat').value; S.limit = 60;
     updateSearch();
   };
-  actions.sclear = () => { Object.assign(S, { q: '', job: '', minLv: '', maxLv: '', cat: '', limit: 60 }); renderSearch(); };
+  actions.sclear = () => { Object.assign(S, { q: '', job: '', minLv: '', maxLv: '', cat: '', limit: 60 }); routes.search(); };
   actions.smore = () => { S.limit += 60; updateSearch(); };
-
   function updateSearch() {
     const res = FF.search(S.q, { job: S.job, minLv: num(S.minLv), maxLv: num(S.maxLv), cat: S.cat });
     $('#scount').textContent = '共 ' + fmt(res.length) + ' 筆' + (res.length > S.limit ? '（顯示前 ' + S.limit + ' 筆）' : '');
@@ -153,32 +146,115 @@
     if (!res.length) { box.innerHTML = '<div class="empty">找不到符合的可製作物品。</div>'; return; }
     box.innerHTML = res.slice(0, S.limit).map(e => {
       const it = e.item;
-      const tags = e.recipes.map(jobTag).join('') + (e.fc ? '<span class="tag fc">🏠 部隊工房</span>' : '');
+      const tags = e.recipes.map(jobTag).join('') + (e.fc ? '<span class="tag fc">部隊工房</span>' : '');
       const ings = e.fc ? e.fc.ings : (e.recipes[0] ? e.recipes[0].ings : []);
       const rid = e.recipes[0] ? e.recipes[0].id : 0;
-      return `<div class="item" data-id="${it.id}">
+      return `<div class="item">
         ${icon(it)}
         <div class="body">
-          <div class="nm">${esc(it.name)} <span class="muted small">ID ${it.id}${it.ilvl ? ' · 品級 ' + it.ilvl : ''}</span></div>
+          <div class="nm">${esc(it.name)} <span class="muted small">${it.ilvl ? '品級 ' + it.ilvl : ''}</span></div>
           <div class="meta">${tags}</div>
           <div class="meta">素材：${ingText(ings, 8)}</div>
         </div>
-        <input type="number" min="1" value="1" class="qty" aria-label="數量">
-        <button class="pri" data-act="sadd" data-id="${it.id}">＋清單</button>
-        ${rid ? `<a href="#/macro/${rid}"><button>巨集</button></a>` : ''}
+        <input type="number" min="1" value="1" class="qty xs" aria-label="數量">
+        <button class="pri" data-act="sadd" data-id="${it.id}">加入清單</button>
+        ${rid ? `<button data-act="go" data-href="#/macro/${rid}">巨集</button>` : ''}
       </div>`;
-    }).join('') + (res.length > S.limit ? '<div style="text-align:center;margin-top:10px"><button data-act="smore">顯示更多</button></div>' : '');
+    }).join('') + (res.length > S.limit ? '<div style="text-align:center;margin-top:12px"><button data-act="smore">顯示更多</button></div>' : '');
   }
   actions.sadd = b => {
-    const row = b.closest('.item');
-    const q = Math.max(1, Math.floor(num($('.qty', row).value, 1)));
+    const q = Math.max(1, Math.floor(num($('.qty', b.closest('.item')).value, 1)));
     addToList(Number(b.dataset.id), q);
     toast('已加入「' + FF.itemName(Number(b.dataset.id)) + '」×' + q);
+  };
+  actions.go = b => { location.hash = b.dataset.href; };
+
+  // ============================================================ 快速套裝
+  const ST = { role: '製作', job: '', min: '', max: '', q: '', qty: 1, limit: 12, off: new Set() };
+  const ROLE_JOBS = {
+    製作: ['CRP', 'BSM', 'ARM', 'GSM', 'LTW', 'WVR', 'ALC', 'CUL'],
+    採集: ['MIN', 'BTN', 'FSH'],
+  };
+  function roleJobs(role) {
+    if (ROLE_JOBS[role]) return ROLE_JOBS[role];
+    const skip = new Set(ROLE_JOBS.製作.concat(ROLE_JOBS.採集, ['ADV']));
+    return Object.keys(D().setJobs).filter(a => !skip.has(a));
+  }
+  const setItemOk = it => !ST.job || (D().cjc.get(it.cjc) || { jobs: [] }).jobs.includes(ST.job);
+  routes.sets = function () {
+    const jobs = roleJobs(ST.role);
+    if (ST.job && !jobs.includes(ST.job)) ST.job = '';
+    view.innerHTML = `
+      <div class="page-title">快速套裝</div>
+      <p class="muted small" style="margin-top:-6px">同等級、同系列名稱的可製作裝備會整理成一組，勾選要的部位後一次加入製作清單（素材準備會自動展開所有半成品與基礎素材）。</p>
+      <div class="row" style="margin-bottom:14px">
+        <div class="seg">${['製作', '採集', '戰鬥'].map(r => `<button data-act="strole" data-r="${r}" class="${ST.role === r ? 'on' : ''}">${r}職業</button>`).join('')}</div>
+        <label class="f">職業 <select data-in="stjob"><option value="">全部</option>${jobs.map(a => `<option value="${a}" ${ST.job === a ? 'selected' : ''}>${esc(D().setJobs[a] || a)}</option>`).join('')}</select></label>
+        <label class="f">裝備等級 <input type="number" data-in="stmin" min="1" max="100" placeholder="最低" value="${esc(ST.min)}"> – <input type="number" data-in="stmax" min="1" max="100" placeholder="最高" value="${esc(ST.max)}"></label>
+        <input type="search" data-live="stq" placeholder="系列名稱（例：雀翎）" value="${esc(ST.q)}">
+        <label class="f">每件數量 <input type="number" class="xs" min="1" value="${ST.qty}" data-in="stqty"></label>
+      </div>
+      <div id="stout"></div>`;
+    updateSets();
+  };
+  function updateSets() {
+    const min = num(ST.min), max = num(ST.max);
+    const sets = D().sets.filter(s => s.role === ST.role && (!min || s.elvl >= min) && (!max || s.elvl <= max) &&
+      (!ST.q || s.name.includes(ST.q)) && s.items.some(setItemOk));
+    const tiers = [];
+    const tmap = new Map();
+    for (const s of sets) {
+      const k = s.elvl + '|' + s.ilvl;
+      if (!tmap.has(k)) { const t = { elvl: s.elvl, ilvl: s.ilvl, sets: [] }; tmap.set(k, t); tiers.push(t); }
+      tmap.get(k).sets.push(s);
+    }
+    const out = $('#stout');
+    if (!tiers.length) { out.innerHTML = '<div class="empty">沒有符合條件的套裝。</div>'; return; }
+    out.innerHTML = tiers.slice(0, ST.limit).map(t => {
+      const cnt = t.sets.reduce((n, s) => n + s.items.filter(it => setItemOk(it) && !ST.off.has(it.id)).length, 0);
+      return `<div class="tier">
+        <div class="tier-h"><h2>Lv${t.elvl}</h2><span class="muted">品級 ${t.ilvl}</span><span class="sp"></span>
+          <button class="pri" data-act="sttier" data-k="${t.elvl}|${t.ilvl}">整個等級加入（${cnt} 件）</button></div>
+        <div class="setcards">${t.sets.map(s => {
+          const its = s.items.filter(setItemOk);
+          const on = its.filter(it => !ST.off.has(it.id)).length;
+          return `<div class="setcard">
+            <div class="row"><h3>${esc(s.name)}</h3><span class="muted small">${its.length} 件</span><span class="sp"></span>
+              <button class="text sm" data-act="stall" data-i="${s.idx}">全選</button><button class="text sm" data-act="stnone" data-i="${s.idx}">全不選</button></div>
+            <div class="chips">${its.map(it => {
+              const item = D().items.get(it.id);
+              const c = D().cjc.get(it.cjc);
+              return `<label><input type="checkbox" data-in="stchk" data-id="${it.id}" ${ST.off.has(it.id) ? '' : 'checked'}>${icon(item, 's')}<span>${esc(item.name)}</span><span class="tag">${esc(c ? c.name.split(' ')[0] : '')}</span></label>`;
+            }).join('')}</div>
+            <button class="pri" data-act="stadd" data-i="${s.idx}" ${on ? '' : 'disabled'}>加入清單（${on} 件）</button>
+          </div>`;
+        }).join('')}</div></div>`;
+    }).join('') + (tiers.length > ST.limit ? '<div style="text-align:center"><button data-act="stmore">顯示更多等級</button></div>' : '');
+  }
+  actions.strole = b => { ST.role = b.dataset.r; ST.limit = 12; routes.sets(); };
+  actions.stmore = () => { ST.limit += 12; updateSets(); };
+  inputs.stjob = el => { ST.job = el.value; updateSets(); };
+  inputs.stmin = el => { ST.min = el.value; updateSets(); };
+  inputs.stmax = el => { ST.max = el.value; updateSets(); };
+  inputs.stq = el => { ST.q = el.value.trim(); updateSets(); };
+  inputs.stqty = el => { ST.qty = Math.max(1, Math.floor(num(el.value, 1))); };
+  inputs.stchk = el => { const id = num(el.dataset.id); if (el.checked) ST.off.delete(id); else ST.off.add(id); updateSets(); };
+  actions.stall = b => { for (const it of D().sets[num(b.dataset.i)].items) ST.off.delete(it.id); updateSets(); };
+  actions.stnone = b => { for (const it of D().sets[num(b.dataset.i)].items) ST.off.add(it.id); updateSets(); };
+  function addSetItems(sets) {
+    let n = 0;
+    for (const s of sets) for (const it of s.items) if (setItemOk(it) && !ST.off.has(it.id)) { addToList(it.id, ST.qty); n++; }
+    toast(n ? '已加入 ' + n + ' 件裝備' + (ST.qty > 1 ? ' ×' + ST.qty : '') : '沒有勾選任何裝備');
+  }
+  actions.stadd = b => addSetItems([D().sets[num(b.dataset.i)]]);
+  actions.sttier = b => {
+    const [e, i] = b.dataset.k.split('|').map(Number);
+    addSetItems(D().sets.filter(s => s.role === ST.role && s.elvl === e && s.ilvl === i && (!ST.q || s.name.includes(ST.q))));
   };
 
   // ============================================================ 清單
   function listSelector() {
-    return `<div class="row">
+    return `<div class="row noprint" style="margin-bottom:12px">
       <select data-in="listsel">${Store.d.lists.map(l => `<option value="${l.id}" ${l.id === Store.d.cur ? 'selected' : ''}>${esc(l.name)}（${l.items.length}）</option>`).join('')}</select>
       <button data-act="lnew">新增清單</button>
       <button data-act="lrename">重新命名</button>
@@ -188,44 +264,38 @@
       <button data-act="limport">匯入</button>
     </div>`;
   }
-  inputs.listsel = el => { Store.d.cur = el.value; Store.save(); route(); };
+  inputs.listsel = el => { Store.d.cur = el.value; Store.save(); updateBadge(); route(); };
   actions.lnew = () => {
     const name = prompt('新清單名稱', '清單 ' + (Store.d.lists.length + 1));
     if (!name) return;
-    const l = newList(name.trim()); Store.d.lists.push(l); Store.d.cur = l.id; Store.save(); route();
+    const l = newList(name.trim()); Store.d.lists.push(l); Store.d.cur = l.id; Store.save(); updateBadge(); route();
   };
-  actions.lrename = () => {
-    const name = prompt('清單名稱', Store.list.name);
-    if (!name) return; Store.list.name = name.trim(); Store.save(); route();
-  };
+  actions.lrename = () => { const name = prompt('清單名稱', Store.list.name); if (!name) return; Store.list.name = name.trim(); Store.save(); route(); };
   actions.ldel = () => {
     if (!confirm('確定刪除清單「' + Store.list.name + '」？')) return;
     Store.d.lists = Store.d.lists.filter(l => l.id !== Store.d.cur);
     if (!Store.d.lists.length) Store.d.lists.push(newList());
-    Store.d.cur = Store.d.lists[0].id; Store.save(); route();
+    Store.d.cur = Store.d.lists[0].id; Store.save(); updateBadge(); route();
   };
-  function exportPayload(l) {
-    return { n: l.name, i: l.items.map(x => [x.id, x.qty]), p: l.pick, b: l.buy };
-  }
   const b64enc = o => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
   const b64dec = s => JSON.parse(decodeURIComponent(escape(atob(s))));
   actions.lexport = () => {
     const l = Store.list;
-    const code = b64enc(exportPayload(l));
+    const code = b64enc({ n: l.name, i: l.items.map(x => [x.id, x.qty]), p: l.pick, b: l.buy });
     const url = location.origin + location.pathname + '#/import/' + code;
-    dialog(`<h3>匯出／分享「${esc(l.name)}」</h3>
-      <p class="muted small">分享連結：對方打開後會詢問是否匯入這份清單。</p>
+    dialog(`<h2>匯出／分享「${esc(l.name)}」</h2>
+      <p class="muted small">對方打開連結後會匯入成一份新清單。</p>
       <textarea id="exurl" rows="3" readonly>${esc(url)}</textarea>
-      <div class="row" style="margin-top:10px"><button class="pri" id="excopy">複製連結</button>
+      <div class="row" style="margin-top:12px"><button class="pri" id="excopy">複製連結</button>
       <button id="extext">複製文字清單</button><span class="sp"></span><button data-close>關閉</button></div>`, d => {
       $('#excopy', d).onclick = () => copy(url, '已複製分享連結');
       $('#extext', d).onclick = () => copy(l.items.map(x => FF.itemName(x.id) + ' x' + x.qty).join('\n'), '已複製文字清單');
     });
   };
   actions.limport = () => {
-    dialog(`<h3>匯入清單</h3><p class="muted small">貼上分享連結或匯出代碼。</p>
+    dialog(`<h2>匯入清單</h2><p class="muted small">貼上分享連結或匯出代碼。</p>
       <textarea id="imp" rows="4"></textarea>
-      <div class="row" style="margin-top:10px"><button class="pri" id="impgo">匯入</button><span class="sp"></span><button data-close>取消</button></div>`, d => {
+      <div class="row" style="margin-top:12px"><button class="pri" id="impgo">匯入</button><span class="sp"></span><button data-close>取消</button></div>`, d => {
       $('#impgo', d).onclick = () => {
         let v = $('#imp', d).value.trim();
         const m = v.match(/#\/import\/(.+)$/); if (m) v = m[1];
@@ -245,8 +315,7 @@
       return true;
     } catch (e) { toast('匯入失敗：內容無法辨識'); return false; }
   }
-
-  function renderList() {
+  routes.list = function () {
     const l = Store.list;
     const rows = l.items.map((x, i) => {
       const it = D().items.get(x.id);
@@ -254,224 +323,258 @@
       const fc = D().fcByResult.get(x.id);
       const sel = prods.length > 1
         ? `<select data-in="lpick" data-id="${x.id}">${prods.map(r => `<option value="${r.id}" ${(l.pick[x.id] || prods[0].id) === r.id ? 'selected' : ''}>${esc(D().jobs[r.job])} Lv${r.level}${(r.flags & 4) ? '（需專家）' : ''}</option>`).join('')}</select>`
-        : (prods[0] ? jobTag(prods[0]) : fc ? '<span class="tag fc">🏠 部隊工房</span>' : '<span class="tag">素材</span>');
+        : (prods[0] ? jobTag(prods[0]) : fc ? '<span class="tag fc">部隊工房</span>' : '<span class="tag">素材</span>');
       const rid = (l.pick[x.id] || (prods[0] && prods[0].id)) || 0;
       return `<tr>
-        <td style="width:46px">${icon(it, 's')}</td>
-        <td><b>${esc(it.name)}</b></td>
+        <td style="width:44px">${icon(it, 's')}</td>
+        <td>${esc(it.name)}</td>
         <td>${sel}</td>
-        <td class="num"><input type="number" min="1" value="${x.qty}" data-in="lqty" data-idx="${i}"></td>
-        <td class="num" style="white-space:nowrap">${rid ? `<a href="#/macro/${rid}"><button class="sm">巨集</button></a> ` : ''}<button class="sm danger" data-act="lrm" data-idx="${i}">移除</button></td>
+        <td class="num"><input type="number" min="1" class="xs" value="${x.qty}" data-in="lqty" data-idx="${i}"></td>
+        <td class="num" style="white-space:nowrap">${rid ? `<button class="sm" data-act="go" data-href="#/macro/${rid}">巨集</button> ` : ''}<button class="sm danger" data-act="lrm" data-idx="${i}">移除</button></td>
       </tr>`;
     }).join('');
     view.innerHTML = `
-      <div class="panel"><h2>製作清單</h2>${listSelector()}</div>
-      <div class="panel">
-        ${l.items.length ? `<table><thead><tr><th></th><th>物品</th><th>製作方式</th><th class="num">數量</th><th></th></tr></thead><tbody>${rows}</tbody></table>
-          <div class="row" style="margin-top:12px"><a href="#/materials"><button class="pri">前往素材準備 →</button></a>
-          <button data-act="lclear" class="danger">清空清單</button></div>`
-        : '<div class="empty">清單是空的。<br><a href="#/search">去搜尋物品</a>，或到<a href="#/sub">潛水艇組件</a>直接加入整套零件。</div>'}
-      </div>`;
-  }
+      <div class="page-title">製作清單</div>${listSelector()}
+      ${l.items.length ? `<table><thead><tr><th></th><th>物品</th><th>製作方式</th><th class="num">數量</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="row" style="margin-top:14px"><button class="pri" data-act="go" data-href="#/materials">前往素材準備 →</button>
+        <button data-act="lclear" class="danger">清空清單</button></div>`
+      : '<div class="empty">清單是空的。到<a href="#/search">搜尋物品</a>或<a href="#/sets">快速套裝</a>加入要製作的東西。</div>'}`;
+  };
   inputs.lqty = el => { const x = Store.list.items[num(el.dataset.idx)]; if (x) { x.qty = Math.max(1, Math.floor(num(el.value, 1))); Store.save(); } };
   inputs.lpick = el => { Store.list.pick[num(el.dataset.id)] = num(el.value); Store.save(); toast('已切換製作方式'); };
-  actions.lrm = b => { Store.list.items.splice(num(b.dataset.idx), 1); Store.save(); updateBadge(); renderList(); };
-  actions.lclear = () => { if (confirm('清空目前清單？')) { Store.list.items = []; Store.save(); updateBadge(); renderList(); } };
+  actions.lrm = b => { Store.list.items.splice(num(b.dataset.idx), 1); Store.save(); updateBadge(); routes.list(); };
+  actions.lclear = () => { if (confirm('清空目前清單？')) { Store.list.items = []; Store.save(); updateBadge(); routes.list(); } };
 
   // ============================================================ 素材準備
   const MT = { hideDone: false };
-  function renderMaterials() {
+  function mrow(n, kind) {
     const l = Store.list;
-    const res = FF.computeMaterials(l);
-    MT.res = res;
+    const craft = kind !== 'raw';
+    const key = craft ? 'c' + n.id : String(n.id);
+    const manual = !!l.done[key];
+    const auto = !manual && n.net <= 0;          // 由上層完成或庫存自動滿足
+    const done = manual || auto;
+    if (MT.hideDone && done) return '';
+    const p = n.producer;
+    let tags = '';
+    if (craft) tags = p.type === 'recipe' ? jobTag(p.rec) : '<span class="tag fc">部隊工房</span>';
+    else tags = srcTag(n.source) + (n.item.flags & FF.FLAG.HQ ? '<span class="tag">可HQ</span>' : '');
+    const canCraft = !craft && (D().recipesByResult.has(n.id) || D().fcByResult.has(n.id));
+    const prods = craft && p.type === 'recipe' ? (D().recipesByResult.get(n.id) || []) : [];
+    const sel = prods.length > 1 ? `<select data-in="pick" data-id="${n.id}" style="height:24px;padding:0 4px;font-size:12px">${prods.map(r => `<option value="${r.id}" ${r.id === p.rec.id ? 'selected' : ''}>${esc(D().jobs[r.job])} Lv${r.level}</option>`).join('')}</select>` : '';
+    const sub = [];
+    sub.push('總需求 ' + fmt(n.total));
+    sub.push('持有 <input type="number" class="xs" min="0" value="' + (l.stock[n.id] || 0) + '" data-in="stock" data-id="' + n.id + '" style="height:22px;width:64px">');
+    if (craft && n.crafts) sub.push('製作 ' + fmt(n.crafts) + ' 次' + (n.surplus ? '（多 ' + n.surplus + '）' : ''));
+    if (!craft && n.source === 'shop' && n.item.price && n.net) sub.push(fmt(n.item.price * n.net) + ' Gil');
+    const acts = [];
+    if (craft && p.type === 'recipe') acts.push(`<button class="sm" data-act="go" data-href="#/macro/${p.rec.id}">巨集</button>`);
+    if (craft && p.type === 'fc') acts.push(`<button class="sm" data-act="fcphase" data-id="${n.id}">工房階段</button>`);
+    if (kind === 'semi') acts.push(`<button class="sm" data-act="buy" data-id="${n.id}" title="不自製，改列為基礎素材">改為購買</button>`);
+    if (canCraft) acts.push(`<button class="sm" data-act="unbuy" data-id="${n.id}">改為自製</button>`);
+    return `<li class="mrow ${done ? 'done' : ''} ${auto ? 'auto' : ''}">
+      <input type="checkbox" data-in="done" data-id="${key}" ${done ? 'checked' : ''} ${auto ? 'disabled title="已由持有或上層完成自動備齊"' : ''} title="${craft ? '已完成製作' : '已備齊'}">
+      ${icon(n.item, 's')}
+      <div class="body"><div class="nm">${esc(n.item.name)} ${tags}${sel}</div><div class="sub">${sub.join('<span>·</span>')}</div></div>
+      <div class="need">${n.net > 0 ? '×' + fmt(n.net) : '✓'}</div>
+      <div class="acts">${acts.join('')}</div>
+    </li>`;
+  }
+  function section(title, nodes, kind, grouped, note) {
+    if (!nodes.length) return '';
+    const l = Store.list;
+    const isDone = n => n.net <= 0 || !!l.done[(kind === 'raw' ? '' : 'c') + n.id];
+    const dn = nodes.filter(isDone).length;
+    const body = grouped
+      ? FF.groupByCat(nodes).map(([cat, list]) => {
+        const rows = list.map(n => mrow(n, kind)).join('');
+        return rows ? `<div class="cat">${esc(cat)}<span class="muted small">${list.filter(isDone).length}/${list.length}</span></div><ul class="mlist">${rows}</ul>` : '';
+      }).join('')
+      : `<ul class="mlist">${nodes.map(n => mrow(n, kind)).join('')}</ul>`;
+    return `<div class="sec">
+      <div class="sec-h"><h2>${title}</h2><span class="muted">${dn} / ${nodes.length}</span><div class="prog"><i style="width:${nodes.length ? dn / nodes.length * 100 : 0}%"></i></div>
+        ${note ? `<span class="muted small">${note}</span>` : ''}</div>
+      ${body || '<div class="muted small" style="padding:8px 0">（全部完成，已隱藏）</div>'}
+    </div>`;
+  }
+  routes.materials = function () {
+    const l = Store.list;
     if (!l.items.length) {
-      view.innerHTML = `<div class="panel"><h2>素材準備</h2>${listSelector()}</div><div class="panel"><div class="empty">清單是空的，先<a href="#/search">搜尋物品</a>加入清單。</div></div>`;
+      view.innerHTML = `<div class="page-title">素材準備</div>${listSelector()}<div class="empty">清單是空的，先到<a href="#/search">搜尋物品</a>或<a href="#/sets">快速套裝</a>加入要製作的東西。</div>`;
       return;
     }
-    const craftsN = res.crafts.reduce((s, n) => s + n.crafts, 0);
-    const rawNeed = res.raw.filter(n => n.net > 0);
-    const rawHtml = [];
-    let cur = '';
-    for (const n of res.raw) {
-      if (MT.hideDone && (l.done[n.id] || n.net <= 0)) continue;
-      if (n.source !== cur) {
-        cur = n.source;
-        rawHtml.push(`<tr><td colspan="6" style="background:var(--panel2)"><b>${esc(FF.SOURCE_LABEL[cur])}</b></td></tr>`);
-      }
-      const canCraft = D().recipesByResult.has(n.id) || D().fcByResult.has(n.id);
-      rawHtml.push(`<tr class="${l.done[n.id] || n.net <= 0 ? 'done' : ''}">
-        <td><input type="checkbox" data-in="done" data-id="${n.id}" ${l.done[n.id] ? 'checked' : ''} title="已備齊"></td>
-        <td><div class="row" style="flex-wrap:nowrap">${icon(n.item, 's')}<span>${esc(n.item.name)}${n.item.flags & FF.FLAG.HQ ? ' <span class="muted small">可HQ</span>' : ''}</span></div></td>
-        <td class="num">${fmt(n.required)}</td>
-        <td class="num"><input type="number" min="0" value="${l.stock[n.id] || 0}" data-in="stock" data-id="${n.id}" title="持有數量"></td>
-        <td class="num"><b>${fmt(n.net)}</b></td>
-        <td class="small muted">${n.source === 'shop' && n.item.price ? fmt(n.item.price * n.net) + ' Gil' : ''}${canCraft ? ` <button class="sm" data-act="unbuy" data-id="${n.id}">改為自製</button>` : ''}</td>
-      </tr>`);
-    }
-    const craftHtml = res.crafts.map((n, i) => {
-      const p = n.producer;
-      const tag = p.type === 'recipe' ? jobTag(p.rec) : '<span class="tag fc">🏠 部隊工房</span>';
-      const prods = D().recipesByResult.get(n.id) || [];
-      const sel = (p.type === 'recipe' && prods.length > 1)
-        ? `<select data-in="pick" data-id="${n.id}">${prods.map(r => `<option value="${r.id}" ${r.id === p.rec.id ? 'selected' : ''}>${esc(D().jobs[r.job])} Lv${r.level}</option>`).join('')}</select>` : '';
-      const done = !!l.done['c' + n.id];
-      if (MT.hideDone && (done || n.net <= 0)) return '';
-      const rid = p.type === 'recipe' ? p.rec.id : 0;
-      return `<tr class="${done || n.net <= 0 ? 'done' : ''}">
-        <td><input type="checkbox" data-in="done" data-id="c${n.id}" ${done ? 'checked' : ''} title="已完成"></td>
-        <td class="num">${i + 1}</td>
-        <td><div class="row" style="flex-wrap:nowrap">${icon(n.item, 's')}<span><b>${esc(n.item.name)}</b> ×${fmt(n.net)}${n.surplus ? ` <span class="muted small">（多出 ${n.surplus}）</span>` : ''}</span></div></td>
-        <td>${tag} ${sel}</td>
-        <td class="num">${n.crafts ? fmt(n.crafts) + ' 次' : '—'}</td>
-        <td class="small muted">${p.type === 'fc' ? '<a href="#/sub" class="small">查看工房階段</a>' : esc(ingText(p.ings.map(([id, a]) => [id, a * n.crafts]), 6))}</td>
-        <td style="white-space:nowrap">${rid ? `<a href="#/macro/${rid}"><button class="sm">巨集</button></a> ` : ''}<button class="sm" data-act="buy" data-id="${n.id}" title="不自製，改成直接取得">改為購買</button></td>
-      </tr>`;
-    }).join('');
-
+    const res = FF.computeMaterials(l);
+    MT.res = res;
+    const rawNeed = res.raws.filter(n => n.net > 0 && !l.done[String(n.id)]);
     view.innerHTML = `
-      <div class="panel"><h2>素材準備</h2>${listSelector()}
-        <div class="kvs">
-          <div class="kv"><b>${l.items.length}</b><span>清單物品</span></div>
-          <div class="kv"><b>${fmt(craftsN)}</b><span>製作次數</span></div>
-          <div class="kv"><b>${rawNeed.length}</b><span>尚缺素材種類</span></div>
-          <div class="kv"><b>${fmt(res.gil)}</b><span>商店購買預估 Gil</span></div>
-        </div>
-        <div class="row noprint">
-          <label class="row" style="gap:6px"><input type="checkbox" data-in="hide" ${MT.hideDone ? 'checked' : ''}> 隱藏已完成／已備齊</label>
-          <span class="sp"></span>
-          <button data-act="cpmat">複製素材清單</button>
-          <button data-act="cpcraft">複製製作順序</button>
-          <button data-act="print">列印</button>
-          <button data-act="resetchk" class="danger">重設勾選與庫存</button>
-        </div>
+      <div class="page-title">素材準備</div>${listSelector()}
+      <div class="kvs">
+        <div class="kv"><b>${res.roots.length}</b><span>成品</span></div>
+        <div class="kv"><b>${res.semis.length}</b><span>半成品種類</span></div>
+        <div class="kv"><b>${fmt(res.craftCount)}</b><span>剩餘製作次數</span></div>
+        <div class="kv"><b>${rawNeed.length}</b><span>尚缺基礎素材種類</span></div>
+        <div class="kv"><b>${fmt(res.gil)}</b><span>商店購買預估 Gil</span></div>
       </div>
-      <div class="panel">
-        <h3>① 需要準備的素材</h3>
-        <div style="overflow:auto"><table><thead><tr><th style="width:40px"></th><th>素材</th><th class="num">需求</th><th class="num">持有</th><th class="num">還需</th><th></th></tr></thead>
-        <tbody>${rawHtml.join('') || '<tr><td colspan="6" class="muted">（不需要額外素材）</td></tr>'}</tbody></table></div>
-        <p class="muted small">「持有」欄可填入背包／雇員／部隊箱的數量，系統會自動扣除並重新計算上層需求。素材來源標記只涵蓋「採集／釣魚／商店」，其餘歸為「其他」。</p>
+      <div class="row noprint" style="margin-bottom:14px">
+        <label class="f"><input type="checkbox" data-in="hide" ${MT.hideDone ? 'checked' : ''}> 隱藏已完成／已備齊</label>
+        <span class="sp"></span>
+        <button data-act="cpmat">複製基礎素材</button>
+        <button data-act="cpcraft">複製製作順序</button>
+        <button data-act="print">列印</button>
+        <button data-act="resetchk" class="danger">重設勾選與持有</button>
       </div>
-      <div class="panel">
-        <h3>② 製作順序（由下而上）</h3>
-        <div style="overflow:auto"><table><thead><tr><th style="width:40px"></th><th class="num" style="width:40px">#</th><th>成品</th><th>職業</th><th class="num">次數</th><th>使用素材</th><th></th></tr></thead>
-        <tbody>${craftHtml || '<tr><td colspan="7" class="muted">（沒有需要製作的項目）</td></tr>'}</tbody></table></div>
-      </div>`;
+      ${section('成品', res.roots, 'root', false, '勾選＝已做好，底下所有素材一併視為備齊')}
+      ${section('半成品', res.semis, 'semi', true, '勾選＝已做好，所用的基礎素材會自動扣除')}
+      ${section('基礎素材', res.raws, 'raw', true, '勾選＝已備齊；填「持有」會自動扣除')}`;
   }
-  inputs.done = el => { Store.list.done[el.dataset.id] = el.checked; if (!el.checked) delete Store.list.done[el.dataset.id]; Store.save(); renderMaterials(); };
-  inputs.stock = el => { const v = Math.max(0, Math.floor(num(el.value))); if (v) Store.list.stock[el.dataset.id] = v; else delete Store.list.stock[el.dataset.id]; Store.save(); renderMaterials(); };
-  inputs.hide = el => { MT.hideDone = el.checked; renderMaterials(); };
-  inputs.pick = el => { Store.list.pick[num(el.dataset.id)] = num(el.value); Store.save(); renderMaterials(); };
-  actions.buy = b => { Store.list.buy[b.dataset.id] = true; Store.save(); renderMaterials(); };
-  actions.unbuy = b => { delete Store.list.buy[b.dataset.id]; Store.save(); renderMaterials(); };
-  actions.cpmat = () => copy(FF.materialsText(MT.res), '已複製素材清單');
+  inputs.done = el => { const l = Store.list; if (el.checked) l.done[el.dataset.id] = true; else delete l.done[el.dataset.id]; Store.save(); routes.materials(); };
+  inputs.stock = el => { const v = Math.max(0, Math.floor(num(el.value))); if (v) Store.list.stock[el.dataset.id] = v; else delete Store.list.stock[el.dataset.id]; Store.save(); routes.materials(); };
+  inputs.hide = el => { MT.hideDone = el.checked; routes.materials(); };
+  inputs.pick = el => { Store.list.pick[num(el.dataset.id)] = num(el.value); Store.save(); routes.materials(); };
+  actions.buy = b => { Store.list.buy[b.dataset.id] = true; Store.save(); routes.materials(); };
+  actions.unbuy = b => { delete Store.list.buy[b.dataset.id]; Store.save(); routes.materials(); };
+  actions.cpmat = () => copy(FF.materialsText(MT.res), '已複製基礎素材');
   actions.cpcraft = () => copy(FF.craftsText(MT.res), '已複製製作順序');
   actions.print = () => window.print();
-  actions.resetchk = () => { if (confirm('清除目前清單的勾選與庫存？')) { const l = Store.list; l.done = {}; l.stock = {}; Store.save(); renderMaterials(); } };
+  actions.resetchk = () => { if (confirm('清除目前清單的勾選與持有數量？')) { const l = Store.list; l.done = {}; l.stock = {}; Store.save(); routes.materials(); } };
+  actions.fcphase = b => {
+    const seq = D().fcByResult.get(num(b.dataset.id));
+    if (!seq) return;
+    dialog(`<h2>${esc(FF.itemName(seq.result))}：公司工房製作階段</h2>
+      <p class="muted small">每個階段需要交付的物品（每組數量 × 組數）。</p>
+      ${seq.parts.map((p, pi) => p.procs.map((proc, qi) => `<div class="phase"><h4>${esc(p.type || '零件')} ${seq.parts.length > 1 ? (pi + 1) + '-' : ''}階段 ${qi + 1}</h4>
+        ${proc.map(([iid, q, sets]) => `<div class="row small" style="gap:6px;margin:2px 0">${icon(D().items.get(iid), 's')}${esc(FF.itemName(iid))} <b>×${q * sets}</b><span class="muted">（${q}×${sets} 組）</span></div>`).join('')}</div>`).join('')).join('')}
+      <div class="row"><span class="sp"></span><button data-close>關閉</button></div>`);
+  };
 
-  // ============================================================ 巨集計算
-  const M = { rid: 0, seq: [], worker: null, running: false, hq: {}, target: 'max', targetNum: 0, effort: 'normal' };
+  // ============================================================ 職業數值
+  const GS = { job: 0 };
+  const jobFull = i => D().setJobs[ROLE_JOBS.製作[i]] || D().jobs[i];
+  routes.stats = function () {
+    const j = GS.job;
+    const st = Store.stats(j);
+    const saved = j in Store.d.stats;
+    view.innerHTML = `
+      <div class="page-title">職業數值</div>
+      <p class="muted small" style="margin-top:-6px">每個製作職業的等級與屬性會存在這台裝置的瀏覽器中，巨集計算會自動帶入；在巨集頁修改也會同步存回這裡。請填入「含食物／藥水加成後」的數值。</p>
+      <div class="gear">
+        <div class="jobs">${D().jobs.map((n, i) => {
+          const s = Store.stats(i);
+          return `<a href="javascript:void 0" data-act="gsjob" data-j="${i}" class="${i === j ? 'on' : ''}">${esc(jobFull(i))}<small>${i in Store.d.stats ? 'Lv' + s.level + ' · ' + s.cs + '/' + s.ctl + '/' + s.cp : '尚未設定'}</small></a>`;
+        }).join('')}</div>
+        <div>
+          <h2>${esc(jobFull(j))} ${saved ? '<span class="tag ok">已儲存</span>' : '<span class="tag">預設值</span>'}</h2>
+          <div class="form">
+            <span>等級</span><input type="number" id="gl" min="1" max="100" value="${st.level}" data-in="gsset">
+            <span>製作力</span><input type="number" id="gcs" min="0" value="${st.cs}" data-in="gsset">
+            <span>加工精度</span><input type="number" id="gctl" min="0" value="${st.ctl}" data-in="gsset">
+            <span>CP</span><input type="number" id="gcp" min="0" value="${st.cp}" data-in="gsset">
+            <span>專家</span><label class="f"><input type="checkbox" id="gspec" data-in="gsset" ${st.spec ? 'checked' : ''}> 已是專家職業</label>
+          </div>
+          <div class="row" style="margin-top:18px">
+            <button data-act="gscopy">把這組數值套用到所有製作職業</button>
+            <button data-act="gsreset" class="danger">清除此職業</button>
+          </div>
+        </div>
+      </div>`;
+  };
+  actions.gsjob = b => { GS.job = num(b.dataset.j); routes.stats(); };
+  inputs.gsset = () => {
+    Store.setStats(GS.job, { level: Math.max(1, Math.min(100, num($('#gl').value, 100))), cs: Math.max(0, num($('#gcs').value)), ctl: Math.max(0, num($('#gctl').value)), cp: Math.max(0, num($('#gcp').value)), spec: $('#gspec').checked });
+    const a = $$('.gear .jobs a')[GS.job]; const s = Store.stats(GS.job);
+    if (a) a.querySelector('small').textContent = 'Lv' + s.level + ' · ' + s.cs + '/' + s.ctl + '/' + s.cp;
+    toast('已儲存');
+  };
+  actions.gscopy = () => {
+    if (!confirm('用目前職業的數值覆蓋全部 8 個製作職業？（專家設定不會複製）')) return;
+    const s = Store.stats(GS.job);
+    for (let i = 0; i < D().jobs.length; i++) Store.setStats(i, { level: s.level, cs: s.cs, ctl: s.ctl, cp: s.cp, spec: i === GS.job ? s.spec : Store.stats(i).spec });
+    routes.stats(); toast('已套用到所有職業');
+  };
+  actions.gsreset = () => { delete Store.d.stats[GS.job]; Store.save(); routes.stats(); };
+
+  // ============================================================ 巨集計算（模擬器）
+  const M = { rid: 0, seq: [], worker: null, running: false, hq: {}, target: 'max', targetNum: 0, effort: 'normal', tab: 'solve' };
   const BUFF_LABEL = { ven: '崇敬', inn: '改革', gs: '闊步', wn: '儉約', man: '掌握', fa: '最終確認', mm: '堅信' };
-  const defaultStats = () => ({ level: 100, cs: 5000, ctl: 4800, cp: 600, spec: false });
-  const jobStats = job => Object.assign(defaultStats(), Store.d.stats[job] || {});
+  const PAL_ROWS = [
+    ['muscleMemory', 'reflect', 'trainedEye'],
+    ['veneration', 'innovation', 'greatStrides', 'wasteNot', 'wasteNot2', 'manipulation', 'finalAppraisal'],
+    ['basicSynth', 'carefulSynth', 'groundwork', 'prudentSynth', 'intensiveSynth', 'focusedSynth', 'delicateSynth'],
+    ['basicTouch', 'standardTouch', 'advancedTouch', 'refinedTouch', 'prudentTouch', 'preparatoryTouch', 'preciseTouch', 'focusedTouch', 'byregotsBlessing', 'trainedFinesse'],
+    ['observe', 'heartAndSoul', 'trainedPerfection'],
+    ['mastersMend', 'immaculateMend'],
+  ];
+  function stopWorker() { if (M.worker) { M.worker.terminate(); M.worker = null; } M.running = false; }
+  const actImg = k => img(D().actionIcons[k]);
 
-  function stopWorker() {
-    if (M.worker) { M.worker.terminate(); M.worker = null; }
-    M.running = false;
-  }
-
-  function renderMacro(args) {
+  routes.macro = function (args) {
     const rid = num(args && args[0]);
     M.rid = D().recipes.has(rid) ? rid : 0;
     const l = Store.list;
     const fromList = l.items.map(x => {
       const prods = D().recipesByResult.get(x.id);
       if (!prods) return null;
-      const r = (l.pick[x.id] && D().recipes.get(l.pick[x.id])) || prods[0];
-      return r;
+      return (l.pick[x.id] && D().recipes.get(l.pick[x.id])) || prods[0];
     }).filter(Boolean);
-    let html = `<div class="panel"><h2>巨集計算</h2>
-      <div class="pick-dd"><input id="mq" data-live="mq" type="search" style="width:100%" placeholder="搜尋要製作的物品（輸入名稱）" autocomplete="off"><div class="dd hidden" id="mdd"></div></div>
-      ${fromList.length ? `<div class="row small" style="margin-top:8px"><span class="muted">從清單選擇：</span>${fromList.map(r => `<a href="#/macro/${r.id}"><button class="sm ${r.id === M.rid ? 'pri' : ''}">${esc(FF.itemName(r.result))}</button></a>`).join('')}</div>` : ''}
+    const picker = `<div class="row" style="margin-bottom:14px">
+      <div class="pick-dd grow"><input id="mq" data-live="mq" type="search" style="width:100%" placeholder="搜尋要製作的物品" autocomplete="off"><div class="dd hidden" id="mdd"></div></div>
+      ${fromList.length ? `<select data-in="mfromlist"><option value="">從製作清單選擇…</option>${fromList.map(r => `<option value="${r.id}" ${r.id === M.rid ? 'selected' : ''}>${esc(FF.itemName(r.result))}</option>`).join('')}</select>` : ''}
     </div>`;
     if (!M.rid) {
-      html += '<div class="panel"><div class="empty">請先選擇一個配方。計算會依你的等級、製作力、加工精度與 CP 求出一組可直接貼進遊戲的巨集。</div></div>';
-      view.innerHTML = html;
+      view.innerHTML = `<div class="page-title">巨集計算</div>${picker}<div class="empty">請先選擇配方。<br>計算會使用「職業數值」中儲存的等級與屬性。</div>`;
       return;
     }
     const rec = D().recipes.get(M.rid);
     const rp = FFSim.recipeParams(rec.row, D().rlt[rec.rltId]);
     M.rp = rp; M.rec = rec;
-    const st = jobStats(rec.job);
-    M.seq = M.seqRid === M.rid ? M.seq : [];
+    if (M.seqRid !== M.rid) { M.seq = []; M.hq = {}; }
     M.seqRid = M.rid;
-    M.hq = M.hqRid === M.rid ? M.hq : {};
-    M.hqRid = M.rid;
+    const st = Store.stats(rec.job);
     const item = D().items.get(rec.result);
-    const hqIngs = rec.ings.filter(([id]) => (D().items.get(id).flags & FF.FLAG.HQ) && id > 19);
-    html += `
-      <div class="panel">
-        <div class="row" style="flex-wrap:nowrap">${icon(item)}<div><h3 style="margin:0">${esc(item.name)} ×${rec.amount}</h3>
-          <div>${jobTag(rec)} <span class="tag">配方 #${rec.id}</span>${rp.expert ? '<span class="tag" style="color:var(--bad)">高難度配方</span>' : ''}${rec.flags & 4 ? '<span class="tag">需專家</span>' : ''}</div></div>
-          <span class="sp"></span><button data-act="maddlist" class="pri">＋加入清單</button></div>
-        <div class="kvs">
-          <div class="kv"><b>${fmt(rp.difficulty)}</b><span>難度（進度）</span></div>
-          <div class="kv"><b>${rp.quality ? fmt(rp.quality) : '—'}</b><span>最大品質</span></div>
-          <div class="kv"><b>${rp.durability}</b><span>耐久</span></div>
-          <div class="kv"><b>${fmt(rp.suggestedCs)}</b><span>建議製作力</span></div>
-          ${rp.reqCs ? `<div class="kv"><b>${fmt(rp.reqCs)}</b><span>需求製作力</span></div>` : ''}
-          ${rp.reqCtl ? `<div class="kv"><b>${fmt(rp.reqCtl)}</b><span>需求加工精度</span></div>` : ''}
+    view.innerHTML = `${picker}
+      <div class="sim-title">${icon(item)}<h1>${esc(item.name)}${rec.amount > 1 ? ' ×' + rec.amount : ''}</h1>${jobTag(rec)}
+        ${rp.expert ? '<span class="tag bad">高難度配方</span>' : ''}${rec.flags & 4 ? '<span class="tag">需專家</span>' : ''}
+        <span class="sp"></span><button data-act="maddlist">加入清單</button></div>
+      <div class="sim-top">
+        <div>
+          <div class="lbl">耐久<b id="tDur"></b></div><div class="durbox" id="durbox"></div>
+          <div class="lbl">CP<b id="tCp"></b></div><div class="bar cp"><i id="bCp"></i></div>
         </div>
-        ${rp.expert ? '<div class="warnbox">高難度配方的製作狀態會隨機變化，本工具的求解器只模擬「通常」狀態，結果僅供參考。</div>' : ''}
+        <div>
+          <div class="lbl">進度<b id="tProg"></b></div><div class="bar"><i id="bProg"></i></div>
+          <div class="lbl">品質<b id="tQual"></b></div><div class="bar q"><i id="bQual"></i></div>
+        </div>
+        <div class="statlist">
+          <span>等級</span><input type="number" id="pl" min="1" max="100" value="${st.level}" data-in="mstat">
+          <span>製作力</span><input type="number" id="pcs" min="0" value="${st.cs}" data-in="mstat">
+          <span>加工精度</span><input type="number" id="pctl" min="0" value="${st.ctl}" data-in="mstat">
+          <span>CP</span><input type="number" id="pcp" min="0" value="${st.cp}" data-in="mstat">
+          <span>專家</span><span style="text-align:right"><input type="checkbox" id="pspec" data-in="mstat" ${st.spec ? 'checked' : ''}></span>
+          <span></span><a href="#/stats" class="small" style="text-align:right">職業數值 →</a>
+        </div>
       </div>
-      <div class="panel">
-        <h3>你的屬性（${esc(D().jobs[rec.job])}）</h3>
-        <div class="row">
-          <label>等級 <input type="number" id="pl" min="1" max="100" value="${st.level}" data-in="mstat"></label>
-          <label>製作力 <input type="number" id="pcs" min="0" value="${st.cs}" data-in="mstat"></label>
-          <label>加工精度 <input type="number" id="pctl" min="0" value="${st.ctl}" data-in="mstat"></label>
-          <label>CP <input type="number" id="pcp" min="0" value="${st.cp}" data-in="mstat"></label>
-          <label class="row" style="gap:6px"><input type="checkbox" id="pspec" data-in="mstat" ${st.spec ? 'checked' : ''}> 專家</label>
+      <div class="sim-body">
+        <div class="palette" id="palette"></div>
+        <div>
+          <div class="seq" id="seq"></div>
+          <div class="tagrow" id="seqtags"></div>
+          <div class="tabs" id="mtabs">${[['solve', '求解器'], ['macro', '巨集'], ['import', '匯入'], ['steps', '步驟明細'], ['recipe', '配方與 HQ 素材']].map(([k, n]) => `<button data-act="mtab" data-t="${k}" class="${M.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+          <div id="mtab"></div>
         </div>
-        <p class="muted small">請填入「含食物／藥水加成後」的數值。${rp.suggestedCs && st.cs < rp.suggestedCs ? '<span class="warn">目前製作力低於建議值，進度可能偏低。</span>' : ''}</p>
-        ${hqIngs.length && rp.quality ? `<h3>HQ 素材（初始品質）</h3>
-          <div class="row">${hqIngs.map(([id, n]) => `<label class="row small" style="gap:6px">${esc(FF.itemName(id))}
-            <input type="number" min="0" max="${n}" value="${M.hq[id] || 0}" data-in="mhq" data-id="${id}" style="width:64px"> / ${n}</label>`).join('')}</div>
-          <div class="muted small" id="initq"></div>` : ''}
-        <div class="row" style="margin-top:12px">
-          <label>目標品質
-            <select id="mtarget" data-in="mtarget">
-              <option value="max" ${M.target === 'max' ? 'selected' : ''}>100%（HQ 必成）</option>
-              <option value="none" ${M.target === 'none' ? 'selected' : ''}>只求完成（不管品質）</option>
-              <option value="custom" ${M.target === 'custom' ? 'selected' : ''}>自訂（收藏價值等）</option>
-            </select></label>
-          <input type="number" id="mtnum" min="0" value="${M.targetNum || ''}" placeholder="品質數值" class="${M.target === 'custom' ? '' : 'hidden'}">
-          <label>搜尋強度
-            <select id="meffort" data-in="meffort">
-              <option value="fast" ${M.effort === 'fast' ? 'selected' : ''}>快速（約 10 秒）</option>
-              <option value="normal" ${M.effort === 'normal' ? 'selected' : ''}>標準（約 30 秒）</option>
-              <option value="deep" ${M.effort === 'deep' ? 'selected' : ''}>精細（約 90 秒）</option>
-            </select></label>
-          <span class="sp"></span>
-          <button class="pri" id="msolve" data-act="msolve">求解巨集</button>
-          <button id="mstop" data-act="mstop" class="hidden">停止</button>
-        </div>
-        <div id="mprog" class="muted small" style="margin-top:8px"></div>
-      </div>
-      <div id="mout"></div>`;
-    view.innerHTML = html;
-    updateInitQ();
-    updateMacroOut();
-  }
-  // 搜尋下拉
+      </div>`;
+    renderTab();
+    updateSim();
+  };
+  // 配方搜尋下拉
   inputs.mq = el => {
     const q = el.value.trim();
     const dd = $('#mdd');
     if (!q) { dd.classList.add('hidden'); return; }
     const res = FF.search(q, {}).filter(e => e.recipes.length).slice(0, 10);
-    dd.innerHTML = res.length ? res.map(e => `<div class="item" data-act="mpickrec" data-rid="${e.recipes[0].id}">${icon(e.item, 's')}<div class="body"><b>${esc(e.item.name)}</b> <span class="muted small">${e.recipes.map(r => esc(D().jobs[r.job]) + ' Lv' + r.level).join(' / ')}</span></div></div>`).join('') : '<div class="item muted">沒有結果</div>';
+    dd.innerHTML = res.length ? res.map(e => `<div class="item" data-act="go" data-href="#/macro/${e.recipes[0].id}">${icon(e.item, 's')}<div class="body"><b>${esc(e.item.name)}</b> <span class="muted small">${e.recipes.map(r => esc(D().jobs[r.job]) + ' Lv' + r.level).join(' / ')}</span></div></div>`).join('') : '<div class="item muted">沒有結果</div>';
     dd.classList.remove('hidden');
   };
-  actions.mpickrec = b => { location.hash = '#/macro/' + b.dataset.rid; };
+  inputs.mfromlist = el => { if (el.value) location.hash = '#/macro/' + el.value; };
   actions.maddlist = () => { addToList(M.rec.result, 1, M.rec.id); toast('已加入清單'); };
 
   function readPlayer() {
@@ -484,16 +587,11 @@
     };
   }
   function hqInitial() {
-    const rec = M.rec;
-    const ings = rec.ings.map(([id, n]) => {
+    const ings = M.rec.ings.map(([id, n]) => {
       const it = D().items.get(id);
       return { ilvl: it.ilvl, amount: n, hq: M.hq[id] || 0, canHq: !!(it.flags & FF.FLAG.HQ) && id > 19 };
     });
     return FFSim.initialQuality(M.rp, ings);
-  }
-  function updateInitQ() {
-    const el = $('#initq'); if (!el) return;
-    el.textContent = '初始品質：' + fmt(hqInitial()) + '（僅為估算）';
   }
   function curCtx() {
     const p = readPlayer();
@@ -501,219 +599,184 @@
     return { player: p, ctx: FFSim.makeCtx(p, M.rp) };
   }
   inputs.mstat = () => {
-    Store.d.stats[M.rec.job] = { level: num($('#pl').value, 100), cs: num($('#pcs').value), ctl: num($('#pctl').value), cp: num($('#pcp').value), spec: $('#pspec').checked };
-    Store.save(); updateMacroOut();
+    const p = readPlayer();
+    Store.setStats(M.rec.job, { level: p.level, cs: p.craftsmanship, ctl: p.control, cp: p.cp, spec: p.specialist });
+    updateSim();
   };
-  inputs.mhq = el => { M.hq[el.dataset.id] = Math.max(0, Math.floor(num(el.value))); updateInitQ(); updateMacroOut(); };
-  inputs.mtarget = el => { M.target = el.value; $('#mtnum').classList.toggle('hidden', el.value !== 'custom'); };
-  inputs.meffort = el => { M.effort = el.value; };
-  const EFFORT = { fast: { t: 10000, r: 2 }, normal: { t: 30000, r: 3 }, deep: { t: 90000, r: 5 } };
+  inputs.mhq = el => { M.hq[el.dataset.id] = Math.max(0, Math.floor(num(el.value))); renderTab(); updateSim(); };
+  actions.mtab = b => { M.tab = b.dataset.t; $$('#mtabs button').forEach(x => x.classList.toggle('on', x === b)); renderTab(); };
 
+  function renderTab() {
+    const box = $('#mtab'); if (!box) return;
+    const rp = M.rp, rec = M.rec;
+    if (M.tab === 'solve') {
+      box.innerHTML = `
+        <div class="row" style="margin-bottom:12px">
+          <button class="pri" id="msolve" data-act="msolve" ${M.running ? 'disabled' : ''}>開始求解</button>
+          <button id="mstop" data-act="mstop" class="${M.running ? '' : 'hidden'}">停止</button>
+          <span class="muted small" id="mprog">${esc(M.progText || '')}</span>
+        </div>
+        <div class="row" style="margin-bottom:10px"><label class="f">目標品質
+          <div class="seg">${[['max', '最大'], ['custom', '自訂'], ['none', '只求完成']].map(([k, n]) => `<button data-act="mtarget" data-t="${k}" class="${M.target === k ? 'on' : ''}">${n}</button>`).join('')}</div></label>
+          <input type="number" id="mtnum" min="0" value="${M.targetNum || rp.quality}" data-in="mtnum" class="${M.target === 'custom' ? '' : 'hidden'}"></div>
+        <div class="row"><label class="f">搜尋強度
+          <div class="seg">${[['fast', '快速 10 秒'], ['normal', '標準 30 秒'], ['deep', '精細 90 秒']].map(([k, n]) => `<button data-act="meffort" data-t="${k}" class="${M.effort === k ? 'on' : ''}">${n}</button>`).join('')}</div></label></div>
+        ${rp.expert ? '<div class="warnbox">高難度配方的製作狀態會隨機變化，求解器只模擬「通常」狀態，結果僅供參考。</div>' : ''}
+        <p class="muted small">求解使用上方的等級、製作力、加工精度、CP 與「配方與 HQ 素材」分頁設定的初始品質。結果是啟發式搜尋，不保證為最佳解。</p>`;
+    } else if (M.tab === 'macro') {
+      const macros = M.seq.length ? FFSim.buildMacros(M.seq, D().actionNames) : [];
+      box.innerHTML = macros.length ? `<div class="row" style="margin-bottom:6px"><span class="muted small">每個巨集最多 15 行（最後一行為完成提示），請依序執行。</span><span class="sp"></span><button data-act="cpall">複製全部</button></div>
+        ${macros.map((m, i) => `<div class="row"><b>巨集 ${i + 1}</b><span class="muted small">${m.seconds} 秒</span><span class="sp"></span><button class="sm" data-act="cpmacro" data-target="mac${i}">複製</button></div><pre class="macro" id="mac${i}">${esc(m.text)}</pre>`).join('')}`
+        : '<div class="empty">尚無流程。可在「求解器」計算，或點左側技能手動排列。</div>';
+    } else if (M.tab === 'import') {
+      box.innerHTML = `<p class="muted small">貼上遊戲巨集（/ac "技能名" &lt;wait.3&gt;），可用來模擬別人分享的巨集。</p>
+        <textarea id="mimp" rows="8" placeholder='/ac "製作" <wait.3>'></textarea>
+        <div class="row" style="margin-top:8px"><button class="pri" data-act="impmacro">匯入並模擬</button></div>`;
+    } else if (M.tab === 'steps') {
+      box.innerHTML = '<div id="steps"></div>';
+      updateSteps();
+    } else {
+      const hqIngs = rec.ings.filter(([id]) => (D().items.get(id).flags & FF.FLAG.HQ) && id > 19);
+      box.innerHTML = `<div class="kvs">
+          <div class="kv"><b>${fmt(rp.difficulty)}</b><span>難度</span></div>
+          <div class="kv"><b>${rp.quality ? fmt(rp.quality) : '—'}</b><span>最大品質</span></div>
+          <div class="kv"><b>${rp.durability}</b><span>耐久</span></div>
+          <div class="kv"><b>${rec.level}</b><span>配方等級</span></div>
+          <div class="kv"><b>${fmt(rp.suggestedCs)}</b><span>建議製作力</span></div>
+          ${rp.reqCs ? `<div class="kv"><b>${fmt(rp.reqCs)}</b><span>需求製作力</span></div>` : ''}
+          ${rp.reqCtl ? `<div class="kv"><b>${fmt(rp.reqCtl)}</b><span>需求加工精度</span></div>` : ''}
+        </div>
+        <h3>素材</h3>
+        ${rec.ings.map(([id, n]) => {
+          const it = D().items.get(id);
+          const can = hqIngs.some(x => x[0] === id) && rp.quality;
+          return `<div class="row small" style="margin:4px 0">${icon(it, 's')}<span style="min-width:160px">${esc(it.name)} ×${n}</span>
+            ${can ? `<label class="f">HQ 數量 <input type="number" class="xs" min="0" max="${n}" value="${M.hq[id] || 0}" data-in="mhq" data-id="${id}"></label>` : ''}</div>`;
+        }).join('')}
+        ${rp.quality && hqIngs.length ? `<p class="muted small">初始品質（估算）：<b>${fmt(hqInitial())}</b></p>` : ''}`;
+    }
+  }
+  actions.mtarget = b => { M.target = b.dataset.t; renderTab(); };
+  inputs.mtnum = el => { M.targetNum = Math.max(0, num(el.value)); };
+  actions.meffort = b => { M.effort = b.dataset.t; renderTab(); };
+
+  const EFFORT = { fast: { t: 10000, r: 2 }, normal: { t: 30000, r: 3 }, deep: { t: 90000, r: 5 } };
   function targetValue(ctx) {
     if (M.target === 'none') return 0;
-    if (M.target === 'custom') return Math.min(ctx.maxQ, Math.max(0, num($('#mtnum').value)));
+    if (M.target === 'custom') return Math.min(ctx.maxQ, Math.max(0, M.targetNum || ctx.maxQ));
     return ctx.maxQ;
   }
-
+  function setProg(html) { M.progText = html.replace(/<[^>]+>/g, ''); const p = $('#mprog'); if (p) p.innerHTML = html; }
   actions.msolve = () => {
     if (M.running) return;
     const { player, ctx } = curCtx();
     if (player.craftsmanship < 1) { toast('請輸入製作力'); return; }
     const target = targetValue(ctx);
     const ef = EFFORT[M.effort];
+    const rid = M.rid;
     M.running = true;
-    $('#msolve').disabled = true; $('#mstop').classList.remove('hidden');
+    renderTab();
     const t0 = Date.now();
-    const prog = $('#mprog');
-    prog.textContent = '計算中…';
-    const timer = setInterval(() => { if (M.running) prog.textContent = '計算中…已 ' + Math.round((Date.now() - t0) / 1000) + ' 秒（上限約 ' + Math.round(ef.t / 1000) + ' 秒）'; }, 500);
+    setProg('計算中…');
+    const timer = setInterval(() => { if (M.running) setProg('計算中…已 ' + Math.round((Date.now() - t0) / 1000) + ' 秒（上限約 ' + Math.round(ef.t / 1000) + ' 秒）'); }, 500);
     const finish = (keys, ok, reached) => {
       clearInterval(timer);
       M.running = false; M.worker = null;
-      const b = $('#msolve'); if (!b) return;
-      b.disabled = false; $('#mstop').classList.add('hidden');
-      if (!ok) { prog.innerHTML = '<span class="bad">在目前屬性下找不到能完成製作的流程（進度不足或耐久／CP 不夠）。請提高製作力或 CP，或使用食物／藥水。</span>'; return; }
-      M.seq = keys; M.seqRid = M.rid;
-      prog.innerHTML = reached ? '<span class="ok">已找到可達成目標品質的流程。</span>' : '<span class="warn">已找到可完成製作的流程，但無法達到目標品質（已盡力提高品質）。</span>';
-      updateMacroOut();
+      if (M.rid !== rid) return;
+      if (!ok) setProg('<span class="bad">在目前屬性下找不到能完成製作的流程，請提高製作力或 CP。</span>');
+      else {
+        M.seq = keys;
+        setProg(reached ? '<span class="ok">已找到可達成目標品質的流程。</span>' : '<span class="warn">可完成製作，但無法達到目標品質（已盡量提高）。</span>');
+      }
+      renderTab(); updateSim();
     };
     const msg = { type: 'solve', player, recipe: M.rp, target, timeLimitMs: ef.t, rounds: ef.r };
-    try {
-      const w = new Worker('js/solver.worker.js');
-      M.worker = w;
-      w.onmessage = e => {
-        if (e.data.type === 'done') finish(e.data.keys, e.data.finished, e.data.reachedTarget);
-        else if (e.data.type === 'error') { clearInterval(timer); M.running = false; prog.innerHTML = '<span class="bad">求解失敗：' + esc(e.data.message) + '</span>'; $('#msolve').disabled = false; $('#mstop').classList.add('hidden'); }
-      };
-      w.onerror = () => { w.terminate(); M.worker = null; runInline(); };
-      w.postMessage(msg);
-    } catch (e) { runInline(); }
     function runInline() {
-      // 無法使用 Worker（例如以 file:// 開啟）時，在主執行緒計算
       setTimeout(() => {
         const r = FFSim.solveBest(ctx, { target, timeLimitMs: Math.min(ef.t, 20000), rounds: 2 });
         finish(r.keys, r.finished, r.reachedTarget);
       }, 30);
     }
+    try {
+      const w = new Worker('js/solver.worker.js');
+      M.worker = w;
+      w.onmessage = e => {
+        if (e.data.type === 'done') finish(e.data.keys, e.data.finished, e.data.reachedTarget);
+        else if (e.data.type === 'error') { clearInterval(timer); M.running = false; setProg('<span class="bad">求解失敗：' + esc(e.data.message) + '</span>'); renderTab(); }
+      };
+      w.onerror = () => { w.terminate(); M.worker = null; runInline(); };
+      w.postMessage(msg);
+    } catch (e) { runInline(); }
   };
-  actions.mstop = () => {
-    stopWorker();
-    const b = $('#msolve'); if (b) b.disabled = false;
-    $('#mstop').classList.add('hidden'); $('#mprog').textContent = '已停止。';
-  };
-
-  actions.addact = b => { M.seq.push(b.dataset.key); updateMacroOut(); };
-  actions.delact = b => { M.seq.splice(num(b.dataset.idx), 1); updateMacroOut(); };
-  actions.clrseq = () => { M.seq = []; updateMacroOut(); };
-  actions.undoact = () => { M.seq.pop(); updateMacroOut(); };
-  actions.cpmacro = b => copy(b.dataset.text || $('#' + b.dataset.target).textContent, '已複製巨集');
+  actions.mstop = () => { stopWorker(); setProg('已停止。'); renderTab(); };
+  actions.addact = b => { M.seq.push(b.dataset.key); updateSim(); };
+  actions.delact = b => { M.seq.splice(num(b.dataset.idx), 1); updateSim(); };
+  actions.clrseq = () => { M.seq = []; updateSim(); };
+  actions.cpmacro = b => copy($('#' + b.dataset.target).textContent, '已複製巨集');
   actions.cpall = () => copy(FFSim.buildMacros(M.seq, D().actionNames).map(m => m.text).join('\n\n'), '已複製全部巨集');
   actions.impmacro = () => {
     const r = FFSim.parseMacro($('#mimp').value, D().actionNames);
     if (!r.keys.length) { toast('沒有辨識到任何技能'); return; }
-    M.seq = r.keys; updateMacroOut();
+    M.seq = r.keys; M.tab = 'steps';
+    $$('#mtabs button').forEach(x => x.classList.toggle('on', x.dataset.t === 'steps'));
+    renderTab(); updateSim();
     toast('已匯入 ' + r.keys.length + ' 個技能' + (r.unknown.length ? '；未識別：' + r.unknown.slice(0, 3).join('、') : ''));
   };
 
-  function updateMacroOut() {
-    const out = $('#mout'); if (!out || !M.rec) return;
+  function updateSim() {
+    if (!$('#seq')) return;
     const { ctx } = curCtx();
     const names = D().actionNames;
-    const sim = FFSim.simulate(ctx, M.seq);
-    const s = sim.final;
     const A = FFSim.ACTIONS;
+    const sim = FFSim.simulate(ctx, M.seq);
+    M.sim = sim; M.ctx = ctx;
+    const s = sim.final;
+    // 上方數值
+    const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, a / b * 100)) : 0);
+    $('#tDur').textContent = Math.max(0, s.d) + ' / ' + ctx.maxD;
+    const boxes = Math.ceil(ctx.maxD / 10), full = Math.ceil(Math.max(0, s.d) / 10);
+    $('#durbox').innerHTML = Array.from({ length: boxes }, (_, i) => '<i class="' + (i < full ? 'f' : '') + '"></i>').join('');
+    $('#tCp').textContent = s.cp + ' / ' + ctx.maxCp;
+    $('#bCp').style.width = pct(s.cp, ctx.maxCp) + '%';
+    $('#tProg').textContent = fmt(Math.min(s.p, ctx.diff)) + ' / ' + fmt(ctx.diff) + '　剩餘 ' + fmt(Math.max(0, ctx.diff - s.p));
+    $('#bProg').style.width = pct(s.p, ctx.diff) + '%';
+    $('#tQual').textContent = ctx.maxQ ? fmt(s.q) + ' / ' + fmt(ctx.maxQ) + '　' + pct(s.q, ctx.maxQ).toFixed(1) + '%' : '此配方無品質';
+    $('#bQual').style.width = pct(s.q, ctx.maxQ) + '%';
     // 技能面板
-    const groups = [['p', '作業'], ['q', '加工'], ['b', '增益'], ['r', '修理／其他']];
-    const grp = k => { const t = A[k].t; return t === 'pq' ? 'q' : (t === 'o' ? 'r' : t); };
-    const pal = groups.map(([g, label]) => `<div style="margin-bottom:6px"><span class="muted small">${label}</span><div class="chips">${FFSim.ACTION_KEYS.filter(k => grp(k) === g).map(k => {
-      const dis = ctx.level < A[k].lvl || (A[k].spec && !ctx.specialist);
-      return `<button class="chip pal ${g}" data-act="addact" data-key="${k}" ${dis ? 'disabled' : ''} title="Lv${A[k].lvl}">${esc(names[k] || k)}<span class="n">${A[k].cp ? A[k].cp + 'CP' : ''}</span></button>`;
-    }).join('')}</div></div>`).join('');
-    const seqChips = M.seq.map((k, i) => `<span class="chip" data-act="delact" data-idx="${i}" title="點擊移除">${i + 1}. ${esc(names[k] || k)}</span>`).join('');
-    let statusHtml;
-    if (!M.seq.length) statusHtml = '<span class="muted">尚未有流程。可按「求解巨集」，或手動點選下方技能／貼上巨集。</span>';
-    else if (sim.status === 1) statusHtml = '<span class="ok">✔ 製作完成</span>';
-    else if (sim.status === 2) statusHtml = '<span class="bad">✘ 耐久歸零，製作失敗</span>';
-    else statusHtml = '<span class="warn">進度尚未完成</span>';
-    const qPct = ctx.maxQ ? Math.min(100, s.q / ctx.maxQ * 100) : 0;
+    $('#palette').innerHTML = PAL_ROWS.map(row => `<div class="grp">${row.map(k => {
+      const a = A[k];
+      const locked = ctx.level < a.lvl || (a.spec && !ctx.specialist);
+      const why = locked ? null : FFSim.whyNot(k, s, ctx);
+      const cost = FFSim.cpCost(a, s);
+      return `<button class="act ${why ? 'na' : ''}" data-act="addact" data-key="${k}" ${locked ? 'disabled' : ''} title="${esc(names[k])}（Lv${a.lvl}${cost ? '，' + cost + ' CP' : ''}${a.dur ? '，耐久 ' + a.dur : ''}）${why ? '\n目前無法使用：' + why : ''}">${actImg(k)}${cost ? '<i>' + cost + '</i>' : ''}</button>`;
+    }).join('')}</div>`).join('');
+    // 技能序列
+    const errIdx = sim.error ? sim.error.index : -1;
+    $('#seq').innerHTML = M.seq.length ? M.seq.map((k, i) => `<button class="act ${i === errIdx ? 'err' : ''} ${errIdx >= 0 && i > errIdx ? 'skip' : ''}" data-act="delact" data-idx="${i}" title="${i + 1}. ${esc(names[k])}（點擊移除）">${actImg(k)}<b>${i + 1}</b></button>`).join('')
+      : '<span class="muted small">點左側技能加入，或用「求解器」自動計算。點這裡的技能可移除。</span>';
     const secs = M.seq.reduce((t, k) => t + FFSim.actionWait(k), 0);
-    const macros = M.seq.length ? FFSim.buildMacros(M.seq, names) : [];
-    const rows = sim.steps.map((st, i) => {
+    let status = '';
+    if (M.seq.length) {
+      if (sim.status === 1) status = s.q >= ctx.maxQ && ctx.maxQ ? '<span class="tag ok">完成 · HQ</span>' : '<span class="tag ok">製作完成</span>';
+      else if (sim.status === 2) status = '<span class="tag bad">耐久歸零，失敗</span>';
+      else status = '<span class="tag">進度未完成</span>';
+    }
+    $('#seqtags').innerHTML = `${status}<span class="tag ok">巨集 ${Math.ceil(M.seq.length / 14) || 0} 個</span><span class="tag">步驟 ${M.seq.length}</span><span class="tag">巨集時間 ${secs} 秒</span>
+      ${M.seq.length ? '<button class="text sm" data-act="clrseq">清空</button>' : ''}
+      ${sim.error && M.seq.length ? `<span class="tag bad">第 ${sim.error.index + 1} 步「${esc(names[sim.error.key])}」：${esc(sim.error.reason)}</span>` : ''}`;
+    if (M.tab === 'macro') renderTab();
+    if (M.tab === 'steps') updateSteps();
+  }
+  function updateSteps() {
+    const box = $('#steps'); if (!box || !M.sim) return;
+    const names = D().actionNames, ctx = M.ctx;
+    const rows = M.sim.steps.map((st, i) => {
       const x = st.s;
       const bf = Object.keys(BUFF_LABEL).filter(k => x[k] > 0).map(k => BUFF_LABEL[k] + x[k]).join(' ');
-      return `<tr><td class="num">${i + 1}</td><td>${esc(names[st.key] || st.key)}</td><td class="num">${fmt(Math.min(x.p, ctx.diff))}</td><td class="num">${fmt(x.q)}</td><td class="num">${x.d}</td><td class="num">${x.cp}</td><td class="num">${x.iq}</td><td class="small muted">${bf}</td></tr>`;
+      return `<tr><td class="num">${i + 1}</td><td><div class="row" style="gap:6px;flex-wrap:nowrap">${img(D().actionIcons[st.key], 's')}${esc(names[st.key])}</div></td><td class="num">${fmt(Math.min(x.p, ctx.diff))}</td><td class="num">${fmt(x.q)}</td><td class="num">${Math.max(0, x.d)}</td><td class="num">${x.cp}</td><td class="num">${x.iq}</td><td class="small muted">${bf}</td></tr>`;
     }).join('');
-    out.innerHTML = `
-      <div class="panel">
-        <h3>結果</h3>
-        <div class="row">${statusHtml}</div>
-        <div class="kvs">
-          <div class="kv"><b>${fmt(Math.min(s.p, ctx.diff))} / ${fmt(ctx.diff)}</b><span>進度</span></div>
-          <div class="kv"><b>${fmt(s.q)}${ctx.maxQ ? ' / ' + fmt(ctx.maxQ) : ''}</b><span>品質${ctx.maxQ ? '（' + qPct.toFixed(1) + '%）' : ''}</span></div>
-          <div class="kv"><b>${Math.max(0, s.d)} / ${ctx.maxD}</b><span>耐久</span></div>
-          <div class="kv"><b>${s.cp} / ${ctx.maxCp}</b><span>剩餘 CP</span></div>
-          <div class="kv"><b>${M.seq.length}</b><span>步驟</span></div>
-          <div class="kv"><b>${secs} 秒</b><span>巨集時間</span></div>
-        </div>
-        ${sim.error && M.seq.length ? `<div class="warnbox">第 ${sim.error.index + 1} 步「${esc(names[sim.error.key] || sim.error.key)}」：${esc(sim.error.reason)}（後續步驟已略過）</div>` : ''}
-        <div class="chips" style="margin:10px 0">${seqChips}</div>
-        <div class="row small"><button data-act="undoact" class="sm" ${M.seq.length ? '' : 'disabled'}>↶ 刪除最後一步</button><button data-act="clrseq" class="sm danger" ${M.seq.length ? '' : 'disabled'}>清空</button></div>
-      </div>
-      ${macros.length ? `<div class="panel"><h3>遊戲巨集（共 ${macros.length} 個）</h3>
-        <div class="muted small">每個巨集最多 15 行（含最後一行提示）。依序按下每個巨集，每個按鈕等上一個巨集的提示出現後再按。</div>
-        ${macros.map((m, i) => `<div class="row"><b>巨集 ${i + 1}</b><span class="muted small">${m.seconds} 秒</span><span class="sp"></span><button class="sm" data-act="cpmacro" data-target="mac${i}">複製</button></div><pre class="macro" id="mac${i}">${esc(m.text)}</pre>`).join('')}
-        <button data-act="cpall">複製全部</button></div>` : ''}
-      <div class="panel">
-        <h3>手動編輯／模擬</h3>
-        ${pal}
-        <details style="margin-top:8px"><summary>貼上現有巨集進行模擬</summary>
-          <textarea id="mimp" rows="6" placeholder='/ac "製作" <wait.3>'></textarea>
-          <button data-act="impmacro" style="margin-top:6px">匯入並模擬</button></details>
-        ${rows ? `<div style="overflow:auto;margin-top:10px"><table><thead><tr><th class="num">#</th><th>技能</th><th class="num">進度</th><th class="num">品質</th><th class="num">耐久</th><th class="num">CP</th><th class="num">內靜</th><th>增益</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
-        <p class="muted small" style="margin-top:10px">模擬假設製作狀態恆為「通常」。公式依社群公開資料實作，實際數值與遊戲可能相差 1 左右；正式使用前建議先在遊戲內核對一次。</p>
-      </div>`;
-  }
-
-  // ============================================================ 潛水艇
-  const SUB = { sel: {}, count: 1, rank: 1 };
-  const SLOT_ORDER = ['潛水艇組件（船體）', '潛水艇組件（船尾）', '潛水艇組件（船首）', '潛水艇組件（艦橋）'];
-  function subIndex() {
-    if (D().subIdx) return D().subIdx;
-    const slots = {};
-    for (const [id, v] of D().subItems) {
-      const it = D().items.get(id);
-      if (!it || !D().fcByResult.has(id)) continue;
-      (slots[v.cat] = slots[v.cat] || []).push({ id, name: it.name, part: v.part, cls: it.name.slice(0, -2) });
-    }
-    for (const k of Object.keys(slots)) slots[k].sort((a, b) => a.part - b.part);
-    const classes = [];
-    for (const e of (slots[SLOT_ORDER[0]] || [])) classes.push(e.cls);
-    D().subIdx = { slots, classes };
-    return D().subIdx;
-  }
-  function renderSub() {
-    const { slots, classes } = subIndex();
-    if (!classes.length) { view.innerHTML = '<div class="panel"><div class="empty">資料中沒有潛水艇組件。</div></div>'; return; }
-    for (const cat of SLOT_ORDER) if (!SUB.sel[cat] || !(slots[cat] || []).some(e => e.id === SUB.sel[cat])) SUB.sel[cat] = (slots[cat] || [])[0] && slots[cat][0].id;
-    view.innerHTML = `
-      <div class="panel">
-        <h2>潛水艇組件製作</h2>
-        <p class="muted small">選好四個部位的組件，即可看到總能力、公司工房各階段需要的物品，並一鍵加入製作清單（連同所有中間素材一併計算）。</p>
-        <div class="row" style="margin-bottom:10px"><span class="muted small">快速套用整套：</span>${classes.map(c => `<button class="sm" data-act="subpreset" data-cls="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-        <div class="slotpick">${SLOT_ORDER.map(cat => `<label>${esc(cat.replace('潛水艇組件（', '').replace('）', ''))}
-          <select data-in="subsel" data-cat="${esc(cat)}">${(slots[cat] || []).map(e => `<option value="${e.id}" ${SUB.sel[cat] === e.id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label>`).join('')}</div>
-        <div class="row" style="margin-top:12px">
-          <label>潛水艇數量 <input type="number" min="1" max="99" value="${SUB.count}" data-in="subcount"></label>
-          <label>潛水艇等級（加上等級加成） <input type="number" min="1" max="${Math.max(1, D().subRanks.length - 1)}" value="${SUB.rank}" data-in="subrank"></label>
-          <span class="sp"></span>
-          <button class="pri" data-act="subadd">＋全套加入清單</button>
-          <button data-act="subaddgo">加入並前往素材準備 →</button>
-        </div>
-      </div>
-      <div id="subout"></div>`;
-    updateSub();
-  }
-  inputs.subsel = el => { SUB.sel[el.dataset.cat] = num(el.value); updateSub(); };
-  inputs.subcount = el => { SUB.count = Math.max(1, Math.floor(num(el.value, 1))); updateSub(); };
-  inputs.subrank = el => { SUB.rank = Math.max(1, Math.floor(num(el.value, 1))); updateSub(); };
-  actions.subpreset = b => {
-    const { slots } = subIndex();
-    for (const cat of SLOT_ORDER) { const e = (slots[cat] || []).find(x => x.cls === b.dataset.cls); if (e) SUB.sel[cat] = e.id; }
-    renderSub();
-  };
-  const subIds = () => SLOT_ORDER.map(c => SUB.sel[c]).filter(Boolean);
-  actions.subadd = () => { for (const id of subIds()) addToList(id, SUB.count); toast('已加入 ' + subIds().length + ' 個組件 ×' + SUB.count); };
-  actions.subaddgo = () => { actions.subadd(); location.hash = '#/materials'; };
-
-  function updateSub() {
-    const ids = subIds();
-    const parts = ids.map(id => D().subParts.get(D().subItems.get(id).part));
-    const sum = k => parts.reduce((t, p) => t + (p ? p[k] : 0), 0);
-    const rk = D().subRanks[Math.min(SUB.rank, D().subRanks.length - 1)] || [0, 0, 0, 0, 0, 0, 0];
-    const stat = [['surv', '偵察 Surveillance', 2], ['ret', '獲得 Retrieval', 3], ['speed', '速度 Speed', 4], ['range', '航程 Range', 5], ['favor', '好感 Favor', 6]];
-    const rows = stat.map(([k, label, bi]) => `<tr><td>${esc(label)}</td><td class="num">${sum(k)}</td><td class="num">+${rk[bi]}</td><td class="num"><b>${sum(k) + rk[bi]}</b></td></tr>`).join('');
-    const maxRank = Math.max(0, ...parts.map(p => (p ? p.rank : 0)));
-    const mat = FF.computeMaterials({ items: ids.map(id => ({ id, qty: SUB.count })), stock: {}, buy: {}, pick: {} });
-    const grouped = {};
-    for (const n of mat.raw) (grouped[n.source] = grouped[n.source] || []).push(n);
-    const phases = ids.map(id => {
-      const seq = D().fcByResult.get(id); const it = D().items.get(id);
-      return `<details><summary><b>${esc(it.name)}</b> <span class="muted small">需求等級 ${(D().subParts.get(D().subItems.get(id).part) || {}).rank || '-'}</span></summary>
-        ${seq.parts.map((p, pi) => p.procs.map((proc, qi) => `<div class="phase"><h4>${esc(p.type || '零件')} ${seq.parts.length > 1 ? (pi + 1) + '-' : ''}階段 ${qi + 1}</h4>
-          <div class="chips">${proc.map(([iid, q, sets]) => `<span class="chip pal" style="cursor:default">${icon(D().items.get(iid), 's')}${esc(FF.itemName(iid))} <b>×${q * sets}</b><span class="n">（${q}×${sets}組）</span></span>`).join('')}</div></div>`).join('')).join('')}
-      </details>`;
-    }).join('');
-    $('#subout').innerHTML = `
-      <div class="grid2">
-        <div class="panel"><h3>總能力</h3>
-          <table><thead><tr><th>能力</th><th class="num">組件合計</th><th class="num">等級加成</th><th class="num">總計</th></tr></thead><tbody>${rows}</tbody></table>
-          <p class="muted small">組件要求的潛水艇等級最高為 Rank ${maxRank}。</p></div>
-        <div class="panel"><h3>全部素材總覽（${SUB.count} 艘）</h3>
-          ${['crystal', 'gather', 'fish', 'shop', 'other'].filter(s => grouped[s]).map(s => `<div style="margin-bottom:6px">${srcTag(s)}<div class="chips" style="margin-top:4px">${grouped[s].map(n => `<span class="chip" style="cursor:default">${esc(n.item.name)} ×${fmt(n.net)}</span>`).join('')}</div></div>`).join('')}
-          <p class="muted small">商店購買預估：${fmt(mat.gil)} Gil；需製作的中間素材 ${mat.crafts.length - ids.length} 種。可到「素材準備」扣除庫存並取得製作順序。</p></div>
-      </div>
-      <div class="panel"><h3>工房製作階段（單件）</h3>
-        <p class="muted small">公司工房每個階段需要放入的物品；階段內每種物品為「每組數量 × 組數」。</p>${phases}</div>`;
+    box.innerHTML = rows ? `<div style="overflow:auto"><table><thead><tr><th class="num">#</th><th>技能</th><th class="num">進度</th><th class="num">品質</th><th class="num">耐久</th><th class="num">CP</th><th class="num">內靜</th><th>增益</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted small">模擬假設製作狀態恆為「通常」；公式依社群資料實作，與遊戲可能相差 1 左右。</p>` : '<div class="empty">尚無步驟。</div>';
   }
 
   // ============================================================ 啟動
@@ -722,7 +785,7 @@
     try {
       await FF.loadData('data/');
     } catch (e) {
-      view.innerHTML = '<div class="panel"><div class="empty bad">資料載入失敗：' + esc(e.message) + '<br>請透過 http(s) 開啟（例如 GitHub Pages），不要直接雙擊 index.html。</div></div>';
+      view.innerHTML = '<div class="empty bad">資料載入失敗：' + esc(e.message) + '<br>請透過 http(s) 開啟（例如 GitHub Pages），不要直接雙擊 index.html。</div>';
       return;
     }
     $('#dataVer').textContent = '資料更新：' + FF.D.meta.builtAt;

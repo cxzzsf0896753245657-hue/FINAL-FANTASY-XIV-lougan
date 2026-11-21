@@ -2,7 +2,7 @@ name: 更新遊戲資料
 
 on:
   schedule:
-    - cron: '0 2 1 * *'   # 每月 1 日 02:00 UTC
+    - cron: '0 2 * * 2'   # 每週二 02:00 UTC（台灣時間 10:00）
   workflow_dispatch:
 
 jobs:

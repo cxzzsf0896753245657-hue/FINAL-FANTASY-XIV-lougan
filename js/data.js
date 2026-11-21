@@ -19,13 +19,18 @@
   FF.loadData = async function (base) {
     base = base || 'data/';
     const get = f => fetch(base + f).then(r => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.json(); });
-    const [it, rc, fc, ac] = await Promise.all([get('items.json'), get('recipes.json'), get('fc.json'), get('actions.json')]);
+    const [it, rc, fc, ac, st] = await Promise.all([get('items.json'), get('recipes.json'), get('fc.json'), get('actions.json'), get('sets.json')]);
     const D = FF.D = {};
     D.meta = it.meta;
     D.cats = it.cats;
     D.jobs = rc.jobs;
     D.rlt = rc.rlt;
-    D.actionNames = ac;
+    D.actionNames = ac.names;
+    D.actionIcons = ac.icons;
+    D.jobAbbr = { CRP: 0, BSM: 1, ARM: 2, GSM: 3, LTW: 4, WVR: 5, ALC: 6, CUL: 7 };
+    D.setJobs = st.jobs;
+    D.cjc = new Map(Object.entries(st.cjc).map(([k, v]) => [Number(k), { name: v[0], jobs: v[1] }]));
+    D.sets = st.sets.map((s, i) => ({ idx: i, name: s[0], role: s[1], ilvl: s[2], elvl: s[3], items: s[4].map(x => ({ id: x[0], cjc: x[1] })) }));
 
     // 物品
     D.items = new Map();
@@ -61,11 +66,6 @@
       D.fcBySeq.set(seq.id, seq);
       D.fcByResult.set(seq.result, seq);
     }
-    D.subItems = new Map(Object.entries(fc.subItems).map(([k, v]) => [Number(k), { part: v[0], cat: v[1] }]));
-    D.subParts = new Map(Object.entries(fc.subParts).map(([k, v]) => [Number(k), {
-      slot: v[0], rank: v[1], components: v[2], surv: v[3], ret: v[4], speed: v[5], range: v[6], favor: v[7], cls: v[8], repair: v[9],
-    }]));
-    D.subRanks = fc.subRanks;
 
     // 搜尋索引
     D.search = [];
