@@ -456,7 +456,7 @@
     const saved = j in Store.d.stats;
     view.innerHTML = `
       <div class="page-title">職業數值</div>
-      <p class="muted small" style="margin-top:-6px">每個製作職業的等級與屬性會存在這台裝置的瀏覽器中，巨集計算會自動帶入；在巨集頁修改也會同步存回這裡。請填入「含食物／藥水加成後」的數值。</p>
+      <p class="muted small" style="margin-top:-6px">每個製作職業的等級與屬性會存在這台裝置的瀏覽器中，巨集計算會自動帶入；在巨集頁修改也會同步存回這裡。請直接填入遊戲角色畫面顯示的數值（已包含專家魂晶 +20 作業精度／+20 加工精度／+15 CP，不需另外加），有吃食物、藥水就填加成後的數值。</p>
       <div class="gear">
         <div class="jobs">${D().jobs.map((n, i) => {
           const s = Store.stats(i);
@@ -466,10 +466,10 @@
           <h2>${esc(jobFull(j))} ${saved ? '<span class="tag ok">已儲存</span>' : '<span class="tag">預設值</span>'}</h2>
           <div class="form">
             <span>等級</span><input type="number" id="gl" min="1" max="100" value="${st.level}" data-in="gsset">
-            <span>製作力</span><input type="number" id="gcs" min="0" value="${st.cs}" data-in="gsset">
+            <span>作業精度</span><input type="number" id="gcs" min="0" value="${st.cs}" data-in="gsset">
             <span>加工精度</span><input type="number" id="gctl" min="0" value="${st.ctl}" data-in="gsset">
-            <span>CP</span><input type="number" id="gcp" min="0" value="${st.cp}" data-in="gsset">
-            <span>專家</span><label class="f"><input type="checkbox" id="gspec" data-in="gsset" ${st.spec ? 'checked' : ''}> 已是專家職業</label>
+            <span>CP(製作力)</span><input type="number" id="gcp" min="0" value="${st.cp}" data-in="gsset">
+            <span>專家</span><label class="f"><input type="checkbox" id="gspec" data-in="gsset" ${st.spec ? 'checked' : ''}> 已是專家職業（可用專心致志、巧奪天工）</label>
           </div>
           <div class="row" style="margin-top:18px">
             <button data-act="gscopy">把這組數值套用到所有製作職業</button>
@@ -494,18 +494,22 @@
   actions.gsreset = () => { delete Store.d.stats[GS.job]; Store.save(); routes.stats(); };
 
   // ============================================================ 巨集計算（模擬器）
-  const M = { rid: 0, seq: [], worker: null, running: false, hq: {}, target: 'max', targetNum: 0, effort: 'normal', tab: 'solve' };
+  const M = { rid: 0, seq: [], worker: null, running: false, hq: {}, target: 'max', targetNum: 0, effort: 'normal', tab: 'export', useSpec: false };
   const BUFF_LABEL = { ven: '崇敬', inn: '改革', gs: '闊步', wn: '儉約', man: '掌握', fa: '最終確認', mm: '堅信' };
   const PAL_ROWS = [
     ['muscleMemory', 'reflect', 'trainedEye'],
     ['veneration', 'innovation', 'greatStrides', 'wasteNot', 'wasteNot2', 'manipulation', 'finalAppraisal'],
-    ['basicSynth', 'carefulSynth', 'groundwork', 'prudentSynth', 'intensiveSynth', 'focusedSynth', 'delicateSynth'],
-    ['basicTouch', 'standardTouch', 'advancedTouch', 'refinedTouch', 'prudentTouch', 'preparatoryTouch', 'preciseTouch', 'focusedTouch', 'byregotsBlessing', 'trainedFinesse'],
+    ['basicSynth', 'carefulSynth', 'groundwork', 'prudentSynth', 'intensiveSynth', 'delicateSynth'],
+    ['basicTouch', 'standardTouch', 'advancedTouch', 'refinedTouch', 'prudentTouch', 'preparatoryTouch', 'preciseTouch', 'byregotsBlessing', 'trainedFinesse'],
     ['observe', 'heartAndSoul', 'trainedPerfection'],
     ['mastersMend', 'immaculateMend'],
   ];
+  const SE_LIST = [''].concat(Array.from({ length: 16 }, (_, i) => '<se.' + (i + 1) + '>'));
+  const macroOpt = () => Object.assign({ notify: 'auto', se: '<se.1>', split: 'even', extraWait: 0 }, Store.d.macroOpt || {});
+  const setMacroOpt = o => { Store.d.macroOpt = Object.assign(macroOpt(), o); Store.save(); };
   function stopWorker() { if (M.worker) { M.worker.terminate(); M.worker = null; } M.running = false; }
   const actImg = k => img(D().actionIcons[k]);
+  const collectOf = rec => (D().collect && D().collect.get(rec.result)) || null;
 
   routes.macro = function (args) {
     const rid = num(args && args[0]);
@@ -526,39 +530,40 @@
     }
     const rec = D().recipes.get(M.rid);
     const rp = FFSim.recipeParams(rec.row, D().rlt[rec.rltId]);
-    M.rp = rp; M.rec = rec;
-    if (M.seqRid !== M.rid) { M.seq = []; M.hq = {}; }
+    M.rp = rp; M.rec = rec; M.collect = collectOf(rec);
+    if (M.seqRid !== M.rid) { M.seq = []; M.hq = {}; M.progText = ''; if (M.target.startsWith('c')) M.target = 'max'; }
     M.seqRid = M.rid;
     const st = Store.stats(rec.job);
     const item = D().items.get(rec.result);
     view.innerHTML = `${picker}
-      <div class="sim-title">${icon(item)}<h1>${esc(item.name)}${rec.amount > 1 ? ' ×' + rec.amount : ''}</h1>${jobTag(rec)}
-        ${rp.expert ? '<span class="tag bad">高難度配方</span>' : ''}${rec.flags & 4 ? '<span class="tag">需專家</span>' : ''}
+      <div class="sim-title"><h1>${esc(item.name)}${rec.amount > 1 ? ' ×' + rec.amount : ''}</h1>${jobTag(rec)}
+        ${M.collect ? '<span class="tag fc">收藏品</span>' : ''}${rp.expert ? '<span class="tag bad">高難度配方</span>' : ''}${rec.flags & 4 ? '<span class="tag">需專家</span>' : ''}
         <span class="sp"></span><button data-act="maddlist">加入清單</button></div>
       <div class="sim-top">
         <div>
           <div class="lbl">耐久<b id="tDur"></b></div><div class="durbox" id="durbox"></div>
-          <div class="lbl">CP<b id="tCp"></b></div><div class="bar cp"><i id="bCp"></i></div>
+          <div class="lbl">CP(製作力)<b id="tCp"></b></div><div class="bar cp"><i id="bCp"></i></div>
         </div>
         <div>
-          <div class="lbl">進度<b id="tProg"></b></div><div class="bar"><i id="bProg"></i></div>
+          <div class="lbl">進展<b id="tProg"></b></div><div class="bar prog"><i id="bProg"></i></div>
           <div class="lbl">品質<b id="tQual"></b></div><div class="bar q"><i id="bQual"></i></div>
+          <div id="collectBar"></div>
         </div>
         <div class="statlist">
-          <span>等級</span><input type="number" id="pl" min="1" max="100" value="${st.level}" data-in="mstat">
-          <span>製作力</span><input type="number" id="pcs" min="0" value="${st.cs}" data-in="mstat">
-          <span>加工精度</span><input type="number" id="pctl" min="0" value="${st.ctl}" data-in="mstat">
-          <span>CP</span><input type="number" id="pcp" min="0" value="${st.cp}" data-in="mstat">
-          <span>專家</span><span style="text-align:right"><input type="checkbox" id="pspec" data-in="mstat" ${st.spec ? 'checked' : ''}></span>
+          <span>等級:</span><input type="number" id="pl" min="1" max="100" value="${st.level}" data-in="mstat">
+          <span>作業精度:</span><input type="number" id="pcs" min="0" value="${st.cs}" data-in="mstat">
+          <span>加工精度:</span><input type="number" id="pctl" min="0" value="${st.ctl}" data-in="mstat">
+          <span>CP(製作力):</span><input type="number" id="pcp" min="0" value="${st.cp}" data-in="mstat">
+          <span>專家:</span><span style="text-align:right"><input type="checkbox" id="pspec" data-in="mstat" ${st.spec ? 'checked' : ''} title="勾選後可手動使用專心致志、巧奪天工"></span>
           <span></span><a href="#/stats" class="small" style="text-align:right">職業數值 →</a>
         </div>
       </div>
       <div class="sim-body">
         <div class="palette" id="palette"></div>
         <div>
-          <div class="seq" id="seq"></div>
+          <div class="seq-wrap"><div class="seq" id="seq"></div></div>
           <div class="tagrow" id="seqtags"></div>
-          <div class="tabs" id="mtabs">${[['solve', '求解器'], ['macro', '巨集'], ['import', '匯入'], ['steps', '步驟明細'], ['recipe', '配方與 HQ 素材']].map(([k, n]) => `<button data-act="mtab" data-t="${k}" class="${M.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+          <div class="tabs" id="mtabs">${[['init', '初期品質'], ['export', '匯出'], ['import', '匯入'], ['solve', '求解'], ['steps', '分析']].map(([k, n]) => `<button data-act="mtab" data-t="${k}" class="${M.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
           <div id="mtab"></div>
         </div>
       </div>`;
@@ -606,31 +611,42 @@
   inputs.mhq = el => { M.hq[el.dataset.id] = Math.max(0, Math.floor(num(el.value))); renderTab(); updateSim(); };
   actions.mtab = b => { M.tab = b.dataset.t; $$('#mtabs button').forEach(x => x.classList.toggle('on', x === b)); renderTab(); };
 
+  const seg = (act, cur, opts) => `<div class="seg">${opts.map(([k, n]) => `<button data-act="${act}" data-t="${k}" class="${String(cur) === String(k) ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   function renderTab() {
     const box = $('#mtab'); if (!box) return;
     const rp = M.rp, rec = M.rec;
     if (M.tab === 'solve') {
+      const tOpts = [['max', '最大品質']];
+      if (M.collect) M.collect.forEach((c, i) => tOpts.push(['c' + i, '收藏價值 ' + c + '（等級 ' + (i + 1) + '）']));
+      tOpts.push(['custom', '自訂'], ['none', '只求完成']);
       box.innerHTML = `
-        <div class="row" style="margin-bottom:12px">
-          <button class="pri" id="msolve" data-act="msolve" ${M.running ? 'disabled' : ''}>開始求解</button>
-          <button id="mstop" data-act="mstop" class="${M.running ? '' : 'hidden'}">停止</button>
-          <span class="muted small" id="mprog">${esc(M.progText || '')}</span>
+        <div class="opt-grid">
+          <span>目標品質</span><div class="row">${seg('mtarget', M.target, tOpts)}
+            <input type="number" id="mtnum" min="0" value="${M.targetNum || rp.quality}" data-in="mtnum" class="${M.target === 'custom' ? '' : 'hidden'}"></div>
+          <span>搜尋強度</span>${seg('meffort', M.effort, [['fast', '快速 10 秒'], ['normal', '標準 30 秒'], ['deep', '精細 90 秒']])}
+          <span>專家技能</span><label class="f"><input type="checkbox" data-in="muspec" ${M.useSpec ? 'checked' : ''}> 允許使用專心致志、巧奪天工（需勾選上方「專家」，會消耗專家之證）</label>
+          <span></span><div class="row"><button class="pri" id="msolve" data-act="msolve" ${M.running ? 'disabled' : ''}>開始求解</button>
+            <button id="mstop" data-act="mstop" class="${M.running ? '' : 'hidden'}">停止</button>
+            <span class="muted small" id="mprog">${esc(M.progText || '')}</span></div>
         </div>
-        <div class="row" style="margin-bottom:10px"><label class="f">目標品質
-          <div class="seg">${[['max', '最大'], ['custom', '自訂'], ['none', '只求完成']].map(([k, n]) => `<button data-act="mtarget" data-t="${k}" class="${M.target === k ? 'on' : ''}">${n}</button>`).join('')}</div></label>
-          <input type="number" id="mtnum" min="0" value="${M.targetNum || rp.quality}" data-in="mtnum" class="${M.target === 'custom' ? '' : 'hidden'}"></div>
-        <div class="row"><label class="f">搜尋強度
-          <div class="seg">${[['fast', '快速 10 秒'], ['normal', '標準 30 秒'], ['deep', '精細 90 秒']].map(([k, n]) => `<button data-act="meffort" data-t="${k}" class="${M.effort === k ? 'on' : ''}">${n}</button>`).join('')}</div></label></div>
         ${rp.expert ? '<div class="warnbox">高難度配方的製作狀態會隨機變化，求解器只模擬「通常」狀態，結果僅供參考。</div>' : ''}
-        <p class="muted small">求解使用上方的等級、製作力、加工精度、CP 與「配方與 HQ 素材」分頁設定的初始品質。結果是啟發式搜尋，不保證為最佳解。</p>`;
-    } else if (M.tab === 'macro') {
-      const macros = M.seq.length ? FFSim.buildMacros(M.seq, D().actionNames) : [];
-      box.innerHTML = macros.length ? `<div class="row" style="margin-bottom:6px"><span class="muted small">每個巨集最多 15 行（最後一行為完成提示），請依序執行。</span><span class="sp"></span><button data-act="cpall">複製全部</button></div>
-        ${macros.map((m, i) => `<div class="row"><b>巨集 ${i + 1}</b><span class="muted small">${m.seconds} 秒</span><span class="sp"></span><button class="sm" data-act="cpmacro" data-target="mac${i}">複製</button></div><pre class="macro" id="mac${i}">${esc(m.text)}</pre>`).join('')}`
-        : '<div class="empty">尚無流程。可在「求解器」計算，或點左側技能手動排列。</div>';
+        <p class="muted small">以光束搜尋＋模擬退火求解：品質優先，達到目標後選巨集時間最短的流程。屬於啟發式搜尋，不保證為最佳解。</p>`;
+    } else if (M.tab === 'export') {
+      const o = macroOpt();
+      const macros = FFSim.buildMacros(M.seq, D().actionNames, o);
+      box.innerHTML = `
+        <div class="opt-grid">
+          <span>新增完成提示</span>${seg('mnotify', o.notify, [['auto', '自動確定'], ['always', '總是提示'], ['none', '不提示']])}
+          <span>拆分過長的巨集</span>${seg('msplit', o.split, [['even', '平均'], ['greedy', '貪婪']])}
+          <span>提示音</span><select data-in="mse" style="width:180px">${SE_LIST.map(x => `<option value="${esc(x)}" ${o.se === x ? 'selected' : ''}>${x ? esc(x) : '無'}</option>`).join('')}</select>
+          <span>增加等待時間</span><input type="number" min="0" max="5" value="${o.extraWait}" data-in="mwait" style="width:180px">
+        </div>
+        ${macros.length ? `<p class="muted small">點擊巨集文字即可複製。</p><div class="macros">${macros.map((m, i) => `<pre class="macro copyable" data-act="cpmacro" data-i="${i}" title="點擊複製巨集 #${i + 1}">${esc(m.text)}</pre>`).join('')}</div>`
+          : '<div class="empty">尚無流程。可在「求解」計算，或點左側技能手動排列。</div>'}`;
+      M.macros = macros;
     } else if (M.tab === 'import') {
-      box.innerHTML = `<p class="muted small">貼上遊戲巨集（/ac "技能名" &lt;wait.3&gt;），可用來模擬別人分享的巨集。</p>
-        <textarea id="mimp" rows="8" placeholder='/ac "製作" <wait.3>'></textarea>
+      box.innerHTML = `<p class="muted small">貼上遊戲巨集（/ac 技能名 &lt;wait.3&gt;），可用來模擬別人分享的巨集。</p>
+        <textarea id="mimp" rows="10" placeholder="/ac 堅信 <wait.3>"></textarea>
         <div class="row" style="margin-top:8px"><button class="pri" data-act="impmacro">匯入並模擬</button></div>`;
     } else if (M.tab === 'steps') {
       box.innerHTML = '<div id="steps"></div>';
@@ -642,35 +658,44 @@
           <div class="kv"><b>${rp.quality ? fmt(rp.quality) : '—'}</b><span>最大品質</span></div>
           <div class="kv"><b>${rp.durability}</b><span>耐久</span></div>
           <div class="kv"><b>${rec.level}</b><span>配方等級</span></div>
-          <div class="kv"><b>${fmt(rp.suggestedCs)}</b><span>建議製作力</span></div>
-          ${rp.reqCs ? `<div class="kv"><b>${fmt(rp.reqCs)}</b><span>需求製作力</span></div>` : ''}
+          <div class="kv"><b>${fmt(rp.suggestedCs)}</b><span>建議作業精度</span></div>
+          ${rp.reqCs ? `<div class="kv"><b>${fmt(rp.reqCs)}</b><span>需求作業精度</span></div>` : ''}
           ${rp.reqCtl ? `<div class="kv"><b>${fmt(rp.reqCtl)}</b><span>需求加工精度</span></div>` : ''}
+          ${M.collect ? `<div class="kv"><b>${M.collect.join(' / ')}</b><span>收藏價值門檻</span></div>` : ''}
         </div>
-        <h3>素材</h3>
+        <h3>素材（HQ 素材會提高初期品質）</h3>
         ${rec.ings.map(([id, n]) => {
           const it = D().items.get(id);
           const can = hqIngs.some(x => x[0] === id) && rp.quality;
           return `<div class="row small" style="margin:4px 0">${icon(it, 's')}<span style="min-width:160px">${esc(it.name)} ×${n}</span>
             ${can ? `<label class="f">HQ 數量 <input type="number" class="xs" min="0" max="${n}" value="${M.hq[id] || 0}" data-in="mhq" data-id="${id}"></label>` : ''}</div>`;
         }).join('')}
-        ${rp.quality && hqIngs.length ? `<p class="muted small">初始品質（估算）：<b>${fmt(hqInitial())}</b></p>` : ''}`;
+        ${rp.quality && hqIngs.length ? `<p class="muted small">初期品質（估算）：<b>${fmt(hqInitial())}</b></p>` : ''}`;
     }
   }
   actions.mtarget = b => { M.target = b.dataset.t; renderTab(); };
   inputs.mtnum = el => { M.targetNum = Math.max(0, num(el.value)); };
+  inputs.muspec = el => { M.useSpec = el.checked; };
   actions.meffort = b => { M.effort = b.dataset.t; renderTab(); };
+  actions.mnotify = b => { setMacroOpt({ notify: b.dataset.t }); renderTab(); updateSim(); };
+  actions.msplit = b => { setMacroOpt({ split: b.dataset.t }); renderTab(); updateSim(); };
+  inputs.mse = el => { setMacroOpt({ se: el.value }); renderTab(); };
+  inputs.mwait = el => { setMacroOpt({ extraWait: Math.max(0, Math.min(5, Math.floor(num(el.value)))) }); renderTab(); updateSim(); };
 
-  const EFFORT = { fast: { t: 10000, r: 2 }, normal: { t: 30000, r: 3 }, deep: { t: 90000, r: 5 } };
+  const EFFORT = { fast: { t: 10000, r: 2 }, normal: { t: 30000, r: 3 }, deep: { t: 90000, r: 6 } };
   function targetValue(ctx) {
     if (M.target === 'none') return 0;
     if (M.target === 'custom') return Math.min(ctx.maxQ, Math.max(0, M.targetNum || ctx.maxQ));
+    if (M.target.startsWith('c') && M.collect) return Math.min(ctx.maxQ, M.collect[num(M.target.slice(1))] * 10);
     return ctx.maxQ;
   }
   function setProg(html) { M.progText = html.replace(/<[^>]+>/g, ''); const p = $('#mprog'); if (p) p.innerHTML = html; }
   actions.msolve = () => {
     if (M.running) return;
-    const { player, ctx } = curCtx();
-    if (player.craftsmanship < 1) { toast('請輸入製作力'); return; }
+    const { player } = curCtx();
+    if (player.craftsmanship < 1) { toast('請輸入作業精度'); return; }
+    player.specialist = player.specialist && M.useSpec;     // 預設不讓求解器使用專家技能
+    const ctx = FFSim.makeCtx(player, M.rp);
     const target = targetValue(ctx);
     const ef = EFFORT[M.effort];
     const rid = M.rid;
@@ -683,7 +708,7 @@
       clearInterval(timer);
       M.running = false; M.worker = null;
       if (M.rid !== rid) return;
-      if (!ok) setProg('<span class="bad">在目前屬性下找不到能完成製作的流程，請提高製作力或 CP。</span>');
+      if (!ok) setProg('<span class="bad">在目前屬性下找不到能完成製作的流程，請提高作業精度或 CP。</span>');
       else {
         M.seq = keys;
         setProg(reached ? '<span class="ok">已找到可達成目標品質的流程。</span>' : '<span class="warn">可完成製作，但無法達到目標品質（已盡量提高）。</span>');
@@ -712,8 +737,12 @@
   actions.addact = b => { M.seq.push(b.dataset.key); updateSim(); };
   actions.delact = b => { M.seq.splice(num(b.dataset.idx), 1); updateSim(); };
   actions.clrseq = () => { M.seq = []; updateSim(); };
-  actions.cpmacro = b => copy($('#' + b.dataset.target).textContent, '已複製巨集');
-  actions.cpall = () => copy(FFSim.buildMacros(M.seq, D().actionNames).map(m => m.text).join('\n\n'), '已複製全部巨集');
+  actions.cpmacro = b => {
+    const m = M.macros && M.macros[num(b.dataset.i)];
+    if (!m) return;
+    copy(m.text, '已複製巨集 #' + (num(b.dataset.i) + 1));
+    b.classList.add('copied'); setTimeout(() => b.classList.remove('copied'), 800);
+  };
   actions.impmacro = () => {
     const r = FFSim.parseMacro($('#mimp').value, D().actionNames);
     if (!r.keys.length) { toast('沒有辨識到任何技能'); return; }
@@ -731,17 +760,32 @@
     const sim = FFSim.simulate(ctx, M.seq);
     M.sim = sim; M.ctx = ctx;
     const s = sim.final;
-    // 上方數值
     const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, a / b * 100)) : 0);
     $('#tDur').textContent = Math.max(0, s.d) + ' / ' + ctx.maxD;
     const boxes = Math.ceil(ctx.maxD / 10), full = Math.ceil(Math.max(0, s.d) / 10);
     $('#durbox').innerHTML = Array.from({ length: boxes }, (_, i) => '<i class="' + (i < full ? 'f' : '') + '"></i>').join('');
     $('#tCp').textContent = s.cp + ' / ' + ctx.maxCp;
     $('#bCp').style.width = pct(s.cp, ctx.maxCp) + '%';
-    $('#tProg').textContent = fmt(Math.min(s.p, ctx.diff)) + ' / ' + fmt(ctx.diff) + '　剩餘 ' + fmt(Math.max(0, ctx.diff - s.p));
+    $('#tProg').textContent = fmt(Math.min(s.p, ctx.diff)) + ' / ' + fmt(ctx.diff);
     $('#bProg').style.width = pct(s.p, ctx.diff) + '%';
-    $('#tQual').textContent = ctx.maxQ ? fmt(s.q) + ' / ' + fmt(ctx.maxQ) + '　' + pct(s.q, ctx.maxQ).toFixed(1) + '%' : '此配方無品質';
-    $('#bQual').style.width = pct(s.q, ctx.maxQ) + '%';
+    const q = Math.min(s.q, ctx.maxQ || s.q);
+    let qtxt = ctx.maxQ ? fmt(q) + ' / ' + fmt(ctx.maxQ) : '此配方無品質';
+    if (ctx.maxQ) qtxt += '　優質率 ' + FFSim.hqChance(q, ctx.maxQ) + '%';
+    if (M.collect) {
+      const cv = Math.floor(q / 10);
+      const lv = M.collect.filter(c => cv >= c).length;
+      qtxt += '　收藏價值 ' + cv + '　收藏價值等級 ' + lv;
+    }
+    $('#tQual').textContent = qtxt;
+    $('#bQual').style.width = pct(q, ctx.maxQ) + '%';
+    // 收藏價值區間
+    const cb = $('#collectBar');
+    if (M.collect && ctx.maxQ) {
+      const xs = M.collect.map(c => pct(c * 10, ctx.maxQ));
+      const cls = ['c1', 'c2', 'c3'];
+      cb.innerHTML = `<div class="cbar">${xs.map((x, i) => `<i class="seg ${cls[i]} ${q >= M.collect[i] * 10 ? 'on' : ''}" style="left:${x}%;width:${(i < 2 ? xs[i + 1] : 100) - x}%"></i><b class="dia ${cls[i]} ${q >= M.collect[i] * 10 ? 'on' : ''}" style="left:${x}%" title="收藏價值 ${M.collect[i]}（品質 ${fmt(M.collect[i] * 10)}）"></b>`).join('')}</div>
+        <div class="clabels">${xs.map((x, i) => `<span style="left:${x}%">${M.collect[i]}</span>`).join('')}</div>`;
+    } else cb.innerHTML = '';
     // 技能面板
     $('#palette').innerHTML = PAL_ROWS.map(row => `<div class="grp">${row.map(k => {
       const a = A[k];
@@ -752,19 +796,22 @@
     }).join('')}</div>`).join('');
     // 技能序列
     const errIdx = sim.error ? sim.error.index : -1;
-    $('#seq').innerHTML = M.seq.length ? M.seq.map((k, i) => `<button class="act ${i === errIdx ? 'err' : ''} ${errIdx >= 0 && i > errIdx ? 'skip' : ''}" data-act="delact" data-idx="${i}" title="${i + 1}. ${esc(names[k])}（點擊移除）">${actImg(k)}<b>${i + 1}</b></button>`).join('')
-      : '<span class="muted small">點左側技能加入，或用「求解器」自動計算。點這裡的技能可移除。</span>';
-    const secs = M.seq.reduce((t, k) => t + FFSim.actionWait(k), 0);
+    $('#seq').innerHTML = M.seq.length ? M.seq.map((k, i) => `<button class="act ${i === errIdx ? 'err' : ''} ${errIdx >= 0 && i > errIdx ? 'skip' : ''}" data-act="delact" data-idx="${i}" title="${i + 1}. ${esc(names[k])}（點擊移除）">${actImg(k)}</button>`).join('') + '<button class="clr" data-act="clrseq" title="清空">⊗</button>'
+      : '<span class="muted small">點左側技能加入，或用「求解」自動計算。點這裡的技能可移除。</span>';
+    const o = macroOpt();
+    const macros = FFSim.buildMacros(M.seq, D().actionNames, o);
+    const lines = macros.reduce((t, m) => t + m.lines.length, 0);
+    const secs = macros.reduce((t, m) => t + m.seconds, 0);
+    const manual = M.seq.reduce((t, k) => t + (FFSim.actionWait(k) === 2 ? 1.5 : 2), 0);
     let status = '';
     if (M.seq.length) {
-      if (sim.status === 1) status = s.q >= ctx.maxQ && ctx.maxQ ? '<span class="tag ok">完成 · HQ</span>' : '<span class="tag ok">製作完成</span>';
+      if (sim.status === 1) status = '<span class="tag ok">製作完成</span>';
       else if (sim.status === 2) status = '<span class="tag bad">耐久歸零，失敗</span>';
-      else status = '<span class="tag">進度未完成</span>';
+      else status = '<span class="tag">進展未完成</span>';
     }
-    $('#seqtags').innerHTML = `${status}<span class="tag ok">巨集 ${Math.ceil(M.seq.length / 14) || 0} 個</span><span class="tag">步驟 ${M.seq.length}</span><span class="tag">巨集時間 ${secs} 秒</span>
-      ${M.seq.length ? '<button class="text sm" data-act="clrseq">清空</button>' : ''}
+    $('#seqtags').innerHTML = `<span class="tag ok">巨集長度: ${M.seq.length}</span><span class="tag">巨集數: ${macros.length}（${lines} 行）</span><span class="tag">工次: ${M.seq.length}</span><span class="tag">巨集耗時: ${secs}s</span><span class="tag">手搓耗時: ${manual.toFixed(1)}s</span>${status}
       ${sim.error && M.seq.length ? `<span class="tag bad">第 ${sim.error.index + 1} 步「${esc(names[sim.error.key])}」：${esc(sim.error.reason)}</span>` : ''}`;
-    if (M.tab === 'macro') renderTab();
+    if (M.tab === 'export') renderTab();
     if (M.tab === 'steps') updateSteps();
   }
   function updateSteps() {
@@ -773,9 +820,9 @@
     const rows = M.sim.steps.map((st, i) => {
       const x = st.s;
       const bf = Object.keys(BUFF_LABEL).filter(k => x[k] > 0).map(k => BUFF_LABEL[k] + x[k]).join(' ');
-      return `<tr><td class="num">${i + 1}</td><td><div class="row" style="gap:6px;flex-wrap:nowrap">${img(D().actionIcons[st.key], 's')}${esc(names[st.key])}</div></td><td class="num">${fmt(Math.min(x.p, ctx.diff))}</td><td class="num">${fmt(x.q)}</td><td class="num">${Math.max(0, x.d)}</td><td class="num">${x.cp}</td><td class="num">${x.iq}</td><td class="small muted">${bf}</td></tr>`;
+      return `<tr><td class="num">${i + 1}</td><td><div class="row" style="gap:6px;flex-wrap:nowrap">${img(D().actionIcons[st.key], 's')}${esc(names[st.key])}</div></td><td class="num">${fmt(Math.min(x.p, ctx.diff))}</td><td class="num">${fmt(Math.min(x.q, ctx.maxQ || x.q))}</td><td class="num">${Math.max(0, x.d)}</td><td class="num">${x.cp}</td><td class="num">${x.iq}</td><td class="small muted">${bf}</td></tr>`;
     }).join('');
-    box.innerHTML = rows ? `<div style="overflow:auto"><table><thead><tr><th class="num">#</th><th>技能</th><th class="num">進度</th><th class="num">品質</th><th class="num">耐久</th><th class="num">CP</th><th class="num">內靜</th><th>增益</th></tr></thead><tbody>${rows}</tbody></table></div>
+    box.innerHTML = rows ? `<div style="overflow-x:auto"><table><thead><tr><th class="num">#</th><th>技能</th><th class="num">進展</th><th class="num">品質</th><th class="num">耐久</th><th class="num">CP</th><th class="num">內靜</th><th>增益</th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="muted small">模擬假設製作狀態恆為「通常」；公式依社群資料實作，與遊戲可能相差 1 左右。</p>` : '<div class="empty">尚無步驟。</div>';
   }
 

@@ -28,6 +28,7 @@ FILES = [
     "CompanyCraftSupplyItem", "CompanyCraftType", "SubmarinePart",
     "SubmarineRank", "GatheringItem", "GilShopItem", "SpearfishingItem",
     "FishParameter", "CraftAction", "Action", "ClassJobCategory", "ClassJob",
+    "CollectablesShopItem", "CollectablesShopRefine",
 ]
 
 # 巨集會用到的非製作職專屬技能 (Action sheet) —— 用「職業無關」的木工 ID 取繁中名稱
@@ -387,6 +388,17 @@ def main():
         "jobs": job_zh,
     }
 
+    # ---------- 收藏品收藏價值門檻 ----------
+    cfi, cf_rows = load(a.raw, "CollectablesShopRefine")
+    refine = {to_int(r[0]): [to_int(r[cfi["LowCollectability"]]), to_int(r[cfi["MidCollectability"]]), to_int(r[cfi["HighCollectability"]])] for r in cf_rows}
+    csi, cs_rows = load(a.raw, "CollectablesShopItem")
+    collect = {}
+    for r in cs_rows:
+        iid = to_int(r[csi["Item"]])
+        ref = refine.get(to_int(r[csi["CollectablesShopRefine"]]))
+        if iid in recipe_results and ref and ref[0] > 0 and iid not in collect:
+            collect[iid] = ref
+
     meta = {"builtAt": time.strftime("%Y-%m-%d", time.gmtime()), "source": "thewakingsands/ffxiv-datamining-tc"}
 
     def dump(name, obj):
@@ -396,7 +408,7 @@ def main():
         print(name, os.path.getsize(path) // 1024, "KB", file=sys.stderr)
 
     dump("items.json", {"meta": meta, "cats": cat_index, "items": items})
-    dump("recipes.json", {"jobs": [jobs[k] for k in sorted(jobs)], "rlt": rlt, "recipes": recipes})
+    dump("recipes.json", {"jobs": [jobs[k] for k in sorted(jobs)], "rlt": rlt, "recipes": recipes, "collect": collect})
     dump("fc.json", {"seqs": fc, "subItems": sub_item_map, "subParts": sub_parts, "subRanks": sub_ranks})
     dump("actions.json", {"names": action_names, "icons": action_icons})
     dump("sets.json", sets_out)

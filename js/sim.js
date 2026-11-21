@@ -16,19 +16,17 @@
     muscleMemory:    { t: 'p', dur: 10, cp: 6,   lvl: 54, pot: () => 300, first: true },
     prudentSynth:    { t: 'p', dur: 5,  cp: 18,  lvl: 88, pot: () => 180, noWN: true },
     intensiveSynth:  { t: 'p', dur: 10, cp: 6,   lvl: 78, pot: () => 400, hs: true },
-    focusedSynth:    { t: 'p', dur: 10, cp: 5,   lvl: 67, pot: () => 200, afterObserve: true },
-    delicateSynth:   { t: 'pq', dur: 10, cp: 32, lvl: 76, pot: () => 100, qpot: () => 100 },
+    delicateSynth:   { t: 'pq', dur: 10, cp: 32, lvl: 76, pot: c => (c.level >= 94 ? 150 : 100), qpot: () => 100 },
 
     basicTouch:      { t: 'q', dur: 10, cp: 18,  lvl: 5,  qpot: () => 100 },
-    standardTouch:   { t: 'q', dur: 10, cp: 32,  lvl: 18, qpot: () => 125, comboFrom: 'basicTouch', comboCp: 18 },
-    advancedTouch:   { t: 'q', dur: 10, cp: 46,  lvl: 68, qpot: () => 150, comboFrom: 'standardTouch', comboCp: 18 },
+    standardTouch:   { t: 'q', dur: 10, cp: 32,  lvl: 18, qpot: () => 125, comboFrom: ['basicTouch'], comboCp: 18 },
+    advancedTouch:   { t: 'q', dur: 10, cp: 46,  lvl: 68, qpot: () => 150, comboFrom: ['standardTouch', 'observe'], comboCp: 18 },
     refinedTouch:    { t: 'q', dur: 10, cp: 24,  lvl: 92, qpot: () => 100, comboIq: 'basicTouch' },
     prudentTouch:    { t: 'q', dur: 5,  cp: 25,  lvl: 66, qpot: () => 100, noWN: true },
     preparatoryTouch:{ t: 'q', dur: 20, cp: 40,  lvl: 71, qpot: () => 200, iq: 2 },
     preciseTouch:    { t: 'q', dur: 10, cp: 18,  lvl: 53, qpot: () => 150, iq: 2, hs: true },
     byregotsBlessing:{ t: 'q', dur: 10, cp: 24,  lvl: 50, qpot: (c, s) => 100 + 20 * s.iq, needIq: 1, byregot: true },
     trainedFinesse:  { t: 'q', dur: 0,  cp: 32,  lvl: 90, qpot: () => 100, needIq: 10 },
-    focusedTouch:    { t: 'q', dur: 10, cp: 18,  lvl: 67, qpot: () => 150, afterObserve: true },
     reflect:         { t: 'q', dur: 10, cp: 6,   lvl: 69, qpot: () => 300, iq: 2, first: true },
     trainedEye:      { t: 'q', dur: 10, cp: 250, lvl: 80, first: true, trainedEye: true },
 
@@ -112,7 +110,7 @@
 
   /** 技能目前的 CP 消耗 */
   function cpCost(a, s) {
-    return (a.comboFrom && s.last === a.comboFrom) ? a.comboCp : a.cp;
+    return (a.comboFrom && a.comboFrom.includes(s.last)) ? a.comboCp : a.cp;
   }
   /** 技能目前的耐久消耗 */
   function durCost(a, s) {
@@ -129,7 +127,6 @@
     if (a.first && s.n !== 0) return '只能在第一步使用';
     if (a.trainedEye && (ctx.level - ctx.rlvl < 10 || ctx.expert)) return '配方等級過高或為高難度配方';
     if (a.needIq && s.iq < a.needIq) return a.needIq === 10 ? '需要 10 層內靜' : '需要內靜';
-    if (a.afterObserve && s.last !== 'observe') return '需緊接在觀察之後';
     if (a.hs && s.hs !== 1) return '需要專心致志';
     if (a.noWN && s.wn > 0) return '儉約狀態中不可用';
     if (key === 'heartAndSoul' && s.hs !== 0) return '每次製作僅限一次';
@@ -148,6 +145,10 @@
     const a = ACTIONS[key];
     if (whyNot(key, s, ctx)) return null;
     const n = cloneState(s);
+    // combo 狀態：加工→中級加工→上級加工；觀察→上級加工；其餘技能中斷 combo
+    const combo = key === 'basicTouch' ? 'basicTouch'
+      : (key === 'standardTouch' && s.last === 'basicTouch') ? 'standardTouch'
+      : key === 'observe' ? 'observe' : '';
     const wasMan = s.man > 0;
     const oldBuff = { ven: s.ven, inn: s.inn, gs: s.gs, wn: s.wn, man: s.man, fa: s.fa, mm: s.mm };
     n.cp -= cpCost(a, s);
@@ -190,8 +191,8 @@
     if (key === 'immaculateMend') n.im = 1;
 
     // ---- 完成 / 失敗判斷
-    if (n.p >= ctx.diff) { n.n++; n.last = key; return { s: n, st: 1 }; }
-    if (n.d <= 0) { n.n++; n.last = key; return { s: n, st: 2 }; }
+    if (n.p >= ctx.diff) { n.n++; n.last = combo; return { s: n, st: 1 }; }
+    if (n.d <= 0) { n.n++; n.last = combo; return { s: n, st: 2 }; }
 
     // ---- 增益
     if (a.special === 'hs') n.hs = 1;
@@ -216,7 +217,7 @@
     if (a.buff) n[a.buff] = a.turns;
     if (a.buff === 'wn') { /* 兩種儉約互斥，後施放的覆蓋 */ }
     n.n++;
-    n.last = key;
+    n.last = combo;
     return { s: n, st: 0 };
   }
 
@@ -241,7 +242,7 @@
   }
 
   // ---------------------------------------------------------------- 求解器
-  const PROGRESS_KEYS = ['basicSynth', 'carefulSynth', 'groundwork', 'prudentSynth', 'intensiveSynth', 'focusedSynth'];
+  const PROGRESS_KEYS = ['basicSynth', 'carefulSynth', 'groundwork', 'prudentSynth', 'intensiveSynth'];
 
   /** 貪婪收尾：只用作業類技能把進度推到完成。回傳 {keys, s} 或 null。 */
   function finishGreedy(s0, ctx, useVen) {
@@ -345,8 +346,13 @@
     const maxSteps = opts.maxSteps || 40;
     const target = Math.min(opts.target != null ? opts.target : ctx.maxQ, ctx.maxQ);
     const deadline = Date.now() + (opts.timeLimitMs || 60000);
-    const s0 = initState(ctx);
-    // 起始就無法收尾的情況
+    let s0 = initState(ctx);
+    const prefix = [];
+    for (const k of (opts.prefix || [])) {
+      const r = step(s0, k, ctx);
+      if (!r || r.st !== 0) return { keys: [], final: s0, finished: false, reachedTarget: false };
+      s0 = r.s; prefix.push(k);
+    }
     let best = null;
     const record = (path, s) => {
       const fin = bestFinish(s, ctx);
@@ -358,9 +364,9 @@
       }
       return true;
     };
-    if (!record([], s0)) return { keys: [], final: s0, finished: false, reachedTarget: false };
+    if (!record(prefix.slice(), s0)) return { keys: [], final: s0, finished: false, reachedTarget: false };
 
-    let beam = [{ s: s0, path: [] }];
+    let beam = [{ s: s0, path: prefix.slice() }];
     for (let depth = 0; depth < maxSteps; depth++) {
       if (Date.now() > deadline) break;
       const next = new Map();
@@ -439,15 +445,19 @@
     const d = decode(ctx, seq);
     if (!d.ok) return { v: -1e9 + d.s.p, d };
     const q = Math.min(d.s.q, target);
-    return { v: q - d.keys.length * ctx.baseQ * 0.004 + d.s.cp * 0.0001, d };
+    let secs = 0;
+    for (const k of d.keys) secs += actionWait(k);
+    // 平滑評分供退火探索；另以 rank（先品質後時間）記錄最佳解
+    return { v: q - secs * ctx.baseQ * 0.08 + d.s.cp * 0.0001, d, rank: q * 1000 - secs };
   }
 
   function polish(ctx, startKeys, opts) {
     opts = opts || {};
     const target = Math.min(opts.target != null ? opts.target : ctx.maxQ, ctx.maxQ);
     const rng = makeRng(opts.seed || 20240607);
-    const iters = opts.iterations || 200000;
-    const deadline = Date.now() + (opts.timeLimitMs || 20000);
+    const iters = opts.iterations || 1e9;               // 以時間為主要上限
+    const tStart = Date.now(), tLen = opts.timeLimitMs || 20000;
+    const deadline = tStart + tLen;
     const pool = ACTION_KEYS.filter(k => {
       const a = ACTIONS[k];
       if (ctx.level < a.lvl) return false;
@@ -460,8 +470,9 @@
     let best = cur.slice(), bestV = curV;
     const T0 = ctx.baseQ * 1.5, T1 = ctx.baseQ * 0.01;
     for (let it = 0; it < iters; it++) {
-      if ((it & 255) === 0 && Date.now() > deadline) break;
-      const T = T0 * Math.pow(T1 / T0, it / iters);
+      if ((it & 255) === 0) { var now = Date.now(); if (now > deadline) break; }
+      const frac = Math.min(1, Math.max(it / iters, ((now || Date.now()) - tStart) / tLen));
+      const T = T0 * Math.pow(T1 / T0, frac);
       const cand = cur.slice();
       const r = rng();
       const len = cand.length;
@@ -473,54 +484,119 @@
       if (cand.length > 60) continue;
       const v = seqValue(ctx, cand, target);
       const dv = v.v - curV.v;
+      if (v.d.ok && (!bestV.d.ok || v.rank > bestV.rank)) { best = cand.slice(); bestV = v; }
       if (dv >= 0 || rng() < Math.exp(dv / T)) {
         cur = cand; curV = v;
-        if (v.v > bestV.v) { best = cand.slice(); bestV = v; }
+        if (v.d.ok && (!bestV.d.ok || v.rank > bestV.rank)) { best = cand.slice(); bestV = v; }
       }
-      if (opts.onProgress && (it % 20000) === 0) opts.onProgress({ phase: 'polish', iter: it, iters, best: Math.min(bestV.d.s.q, target), target });
+      if (opts.onProgress && (it % 50000) === 0) opts.onProgress({ phase: 'polish', iter: it, iters, best: Math.min(bestV.d.s.q, target), target });
     }
     const d = bestV.d;
     return { keys: d.keys, final: d.s, finished: d.ok, reachedTarget: d.ok && d.s.q >= target };
   }
 
-  /** 求解 + 退火優化。多次不同亂數種子取最佳。 */
-  function solveBest(ctx, opts) {
-    opts = opts || {};
-    const t0 = Date.now();
-    const total = opts.timeLimitMs || 30000;
-    const first = solve(ctx, { width: opts.width || 1200, target: opts.target, timeLimitMs: total * 0.35, onProgress: opts.onProgress });
-    if (!first.finished) return first;
-    let best = first;
-    const rounds = opts.rounds || 3;
-    for (let i = 0; i < rounds; i++) {
-      const left = total - (Date.now() - t0);
-      if (left < 500) break;
-      const r = polish(ctx, best.keys, { target: opts.target, seed: 1000 + i * 7919, iterations: opts.iterations || 150000, timeLimitMs: left / (rounds - i), onProgress: opts.onProgress });
-      if (r.finished) {
-        const q1 = Math.min(r.final.q, opts.target != null ? opts.target : ctx.maxQ), q0 = Math.min(best.final.q, opts.target != null ? opts.target : ctx.maxQ);
-        if (q1 > q0 || (q1 === q0 && r.keys.length < best.keys.length)) best = r;
+  /** 收尾：逐一嘗試刪除、替換、刪兩步插一步，直到找不到更好的流程 */
+  function shorten(ctx, best, tq, better) {
+    const pool = ACTION_KEYS.filter(k => ctx.level >= ACTIONS[k].lvl && (!ACTIONS[k].spec || ctx.specialist));
+    const tryKeys = keys => {
+      const d = decode(ctx, keys);
+      return d.ok ? { keys: d.keys, final: d.s, finished: true, reachedTarget: d.s.q >= tq } : null;
+    };
+    let improved = true, guard = 0;
+    while (improved && guard++ < 20) {
+      improved = false;
+      const k0 = best.keys;
+      const cands = [];
+      for (let i = 0; i < k0.length; i++) {
+        cands.push(k0.slice(0, i).concat(k0.slice(i + 1)));
+        for (const a of pool) if (a !== k0[i]) cands.push(k0.slice(0, i).concat([a], k0.slice(i + 1)));
+        if (i + 1 < k0.length) for (const a of pool) cands.push(k0.slice(0, i).concat([a], k0.slice(i + 2)));
+      }
+      for (const c of cands) {
+        const r = tryKeys(c);
+        if (r && better(r, best)) { best = r; improved = true; }
       }
     }
     return best;
   }
 
+  /** 求解 + 退火優化。多次不同亂數種子取最佳。 */
+  function solveBest(ctx, opts) {
+    opts = opts || {};
+    const tq = Math.min(opts.target != null ? opts.target : ctx.maxQ, ctx.maxQ);
+    const secs = r => r.keys.reduce((t, k) => t + actionWait(k), 0);
+    const better = (a, b) => {
+      const qa = Math.min(a.final.q, tq), qb = Math.min(b.final.q, tq);
+      return qa > qb || (qa === qb && secs(a) < secs(b));
+    };
+    const t0 = Date.now();
+    const total = opts.timeLimitMs || 30000;
+    // 多個起手式各自光束搜尋，再分別退火，取最佳
+    const openers = [[]];
+    for (const k of ['muscleMemory', 'reflect']) if (!whyNot(k, initState(ctx), ctx)) openers.push([k]);
+    const starts = [];
+    for (const pre of openers) {
+      const r = solve(ctx, { width: opts.width || 1000, target: opts.target, prefix: pre, timeLimitMs: total * 0.3 / openers.length, onProgress: opts.onProgress });
+      if (r.finished) starts.push(r);
+    }
+    if (!starts.length) return solve(ctx, { width: 300, target: opts.target, timeLimitMs: 5000 });
+    let best = starts[0];
+    for (const r of starts) if (better(r, best)) best = r;
+    const rounds = Math.max(starts.length, opts.rounds || 3);
+    for (let i = 0; i < rounds; i++) {
+      const left = total - (Date.now() - t0);
+      if (left < 300) break;
+      const from = starts[i % starts.length];
+      const r = polish(ctx, from.keys, { target: opts.target, seed: 1000 + i * 7919, iterations: opts.iterations, timeLimitMs: left / (rounds - i), onProgress: opts.onProgress });
+      if (r.finished && better(r, best)) best = r;
+      if (r.finished && better(r, from)) starts[i % starts.length] = r;
+    }
+    return shorten(ctx, best, tq, better);
+  }
+
   // ---------------------------------------------------------------- 巨集
-  /** 產生巨集文字。names: {actionKey: 繁中名稱}。回傳 [{lines, text, seconds}] */
+  /**
+   * 產生巨集文字。names: {actionKey: 繁中名稱}
+   * opts: { notify: 'auto'|'always'|'none', se: '<se.1>'|'', split: 'even'|'greedy', extraWait: 0 }
+   *   auto：放得下時才在巨集最後加完成提示（剛好 15 行時不另外拆出新巨集）
+   * 回傳 [{lines, text, seconds}]
+   */
   function buildMacros(keys, names, opts) {
     opts = opts || {};
-    const perMacro = (opts.maxLines || 15) - 1;           // 保留一行給 /echo
+    const notify = opts.notify || 'auto';
+    const se = opts.se == null ? '<se.1>' : opts.se;
+    const extra = Math.max(0, Math.floor(opts.extraWait || 0));
+    const MAX = 15;
+    if (!keys.length) return [];
+    let per = notify === 'none' ? MAX : MAX - 1;
+    if (notify === 'auto' && keys.length <= MAX && keys.length > MAX - 1) per = MAX;   // 一個巨集剛好放滿就不加提示
+    let n = Math.ceil(keys.length / per);
+    const sizes = [];
+    if (opts.split === 'greedy') { for (let i = 0; i < n; i++) sizes.push(Math.min(per, keys.length - i * per)); }
+    else { const base = Math.floor(keys.length / n), rem = keys.length % n; for (let i = 0; i < n; i++) sizes.push(base + (i < rem ? 1 : 0)); }
     const out = [];
-    for (let i = 0; i < keys.length; i += perMacro) {
-      const chunk = keys.slice(i, i + perMacro);
-      const idx = out.length + 1;
-      const total = Math.ceil(keys.length / perMacro);
-      const lines = chunk.map(k => '/ac "' + (names[k] || k) + '" <wait.' + actionWait(k) + '>');
-      lines.push('/echo 巨集 ' + idx + '/' + total + (idx === total ? ' 完成！' : ' 完成') + ' <se.1>');
+    let pos = 0;
+    for (let i = 0; i < n; i++) {
+      const chunk = keys.slice(pos, pos + sizes[i]); pos += sizes[i];
+      const lines = chunk.map(k => {
+        const nm = names[k] || k;
+        return '/ac ' + (/\s/.test(nm) ? '"' + nm + '"' : nm) + ' <wait.' + (actionWait(k) + extra) + '>';
+      });
+      if (notify !== 'none' && lines.length < MAX) lines.push('/e 巨集#' + (i + 1) + ' 已完成！' + (se ? ' ' + se : ''));
       let sec = 0;
-      for (const k of chunk) sec += actionWait(k);
+      for (const k of chunk) sec += actionWait(k) + extra;
       out.push({ lines, text: lines.join('\n'), seconds: sec });
     }
     return out;
+  }
+
+  // 品質百分比 → HQ 機率（%）
+  const HQ_TABLE = [1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10,
+    11, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 17, 17, 17, 18, 18, 18, 19, 19, 20, 20, 21, 22, 23, 24, 26, 28,
+    31, 34, 38, 42, 47, 52, 58, 64, 68, 71, 74, 76, 78, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 94, 96, 98, 100];
+  function hqChance(q, maxQ) {
+    if (!maxQ) return 0;
+    return HQ_TABLE[Math.max(0, Math.min(100, Math.floor(q * 100 / maxQ)))];
   }
 
   /** 解析貼上的巨集文字，回傳技能 key 陣列與未識別的行 */
@@ -538,7 +614,7 @@
   }
 
   const api = { ACTIONS, ACTION_KEYS, actionWait, recipeParams, makeCtx, initialQuality, initState, step, whyNot,
-    simulate, solve, polish, solveBest, decode, buildMacros, parseMacro, cpCost, durCost };
+    simulate, solve, polish, solveBest, decode, buildMacros, hqChance, parseMacro, cpCost, durCost };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FFSim = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -25,6 +25,7 @@
     D.cats = it.cats;
     D.jobs = rc.jobs;
     D.rlt = rc.rlt;
+    D.collect = new Map(Object.entries(rc.collect || {}).map(([k, v]) => [Number(k), v]));
     D.actionNames = ac.names;
     D.actionIcons = ac.icons;
     D.jobAbbr = { CRP: 0, BSM: 1, ARM: 2, GSM: 3, LTW: 4, WVR: 5, ALC: 6, CUL: 7 };
